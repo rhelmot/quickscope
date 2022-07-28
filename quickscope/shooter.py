@@ -144,7 +144,11 @@ class ScriptManager:
     def __next__(self):
         while True:
             if not self.buffer:
-                self._buffer_targets()
+                try:
+                    self._buffer_targets()
+                except nclib.NetcatError:
+                    traceback.print_exc()
+                    print('Warning: failed to retrieve targets')
             if not self.buffer:
                 if isinstance(self.target_mode, Forever) and self.toplevel:
                     self.eof = False
@@ -365,8 +369,11 @@ def shoot(
         for flag in flag_regex.finditer(line):
             SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
 
-    if proc.wait(deadline - time.time()):
+    try:
+        proc.wait(deadline - time.time())
+    except subprocess.TimeoutExpired:
         proc.kill()
+        proc.wait()
     LIVE_PROCESSES.remove(proc)
 
     if logdir is not None:
@@ -392,8 +399,8 @@ SUBMISSIONS_DONE = False
 SUBMISSION_QUEUE = Queue(maxsize=10000)
 
 def submission_routine(server, debounce):
+    buffer = set()
     while not SUBMISSIONS_DONE:
-        buffer = set()
         deadline = time.time() + debounce
         while True:
             try:
@@ -402,10 +409,23 @@ def submission_routine(server, debounce):
                 break
 
         if buffer:
-            sock = nclib.Netcat(server)
-            sock.sendln(b'submit')
-            sock.send(b''.join(s.dump().encode() + b'\n' for s in buffer))
-            sock.close()
+            try:
+                sock = nclib.Netcat(server)
+            except:
+                traceback.print_exc()
+                print('Warning: could not connect to server for flag submission')
+                continue
+            try:
+                sock.sendln(b'submit')
+                sock.send(b''.join(s.dump().encode() + b'\n' for s in buffer))
+            except:
+                traceback.print_exc()
+                print('Warning: failed to submit flags')
+            else:
+                buffer.clear()
+            finally:
+                sock.close()
+
 
 def main():
     args = parser.parse_args(sys.argv[1:])

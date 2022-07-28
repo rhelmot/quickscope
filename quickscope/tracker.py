@@ -1,7 +1,5 @@
 import random
 import traceback
-import sys
-import argparse
 import concurrent.futures
 import threading
 import nclib
@@ -21,22 +19,16 @@ class Tracker:
 
     TICK_TIMEOUT = 3
     RETRY_TIMEOUT = 3
+    BIND_TO = '0.0.0.0'
+    WORKER_THREADS = 8
 
     # DON'T TOUCH THIS
 
     @classmethod
     def main(cls):
-        parser = argparse.ArgumentParser(sys.argv[0])
-        parser.add_argument("workers", type=int)
-        parser.add_argument("bindto", type=str)
-        args = parser.parse_args(sys.argv[1:])
+        cls().run()
 
-        cls(args.workers, args.bindto).run()
-
-    def __init__(self, workers: int, bindto: str):
-        self.workers = workers
-        self.bindto = bindto
-
+    def __init__(self):
         self.lock = threading.Lock()
         self.tick = -1
         self.targets: Dict[Target, TargetStatus] = {}
@@ -47,10 +39,10 @@ class Tracker:
         assert b'\n' not in self.FLAG_REGEX
 
     def run(self):
-        server = nclib.server.TCPServer((self.bindto, PORT), verbose=True)
+        server = nclib.server.TCPServer((self.BIND_TO, PORT))
         scraper_thread = threading.Thread(target=self.scraper_thread)
         scraper_thread.start()
-        with concurrent.futures.ThreadPoolExecutor(self.workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(self.WORKER_THREADS) as executor:
             for client in server:
                 executor.submit(self.handle, client)
 
