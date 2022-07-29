@@ -92,7 +92,10 @@ class Tracker:
                 self.untarget_host_port(result.submission.target.host, result.submission.target.port)
             elif result.result == SubmissionResult.OK:
                 print('BREAD')
-                sock.sendline(result.submission.flag)
+                try:
+                    sock.sendline(result.submission.flag)
+                except BrokenPipeError:
+                    pass
                 self.untarget_target(result.submission.target)
             elif result.result == SubmissionResult.ALREADY_SUBMITTED:
                 self.untarget_target(result.submission.target)
@@ -189,7 +192,7 @@ class Tracker:
         if result is None:
             newstuff = []
             for target, status in self.targets.items():
-                if not target.same_service(self.service_names[service_name]):
+                if target.port != self.service_names[service_name].port:
                     continue
                 if status.retired:
                     continue
@@ -212,7 +215,7 @@ class Tracker:
 
         result = []
         for target, status in self.targets.items():
-            if not target.same_service(self.service_names[service_name]):
+            if target.port != self.service_names[service_name].port:
                 continue
             if status.tick_last_seen != tick:
                 continue

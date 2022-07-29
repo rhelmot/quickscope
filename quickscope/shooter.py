@@ -13,7 +13,7 @@ import threading
 import psutil
 import traceback
 from dataclasses import dataclass
-from queue import Queue, Empty
+import queue
 
 import nclib
 
@@ -35,6 +35,7 @@ parser.add_argument('--everyone', help='Fire at all live targets and quit', acti
 parser.add_argument('--forever', help='Fire at all live targets until the end of time', action='store_true')
 parser.add_argument('--batch', help='Tunes the number of targets which are claimed at once', type=int, default=1)
 parser.add_argument('--logdir', help='Directory to store logs in')
+parser.add_argument('--no-stdout', help='Disable printing exploit logs to stdout', action='store_true')
 parser.add_argument('--timeout', help='Timeout (seconds) for each exploit run', type=int)
 
 class NotAnExploit(ValueError):
@@ -219,7 +220,7 @@ class SynchronousPool:
 
 class AsyncPool:
     def __init__(self, procs: int):
-        self.queue = Queue(maxsize=1)
+        self.queue = queue.Queue(maxsize=1)
         self.threads = [threading.Thread(target=self.worker, daemon=True) for _ in range(procs)]
         self.args = None
         self.kwargs = None
@@ -255,7 +256,7 @@ class AdaptivePool:
 
         self.args = None
         self.kwargs = None
-        self.queue = Queue(maxsize=1)
+        self.queue = queue.Queue(maxsize=1)
         self.lock = threading.Lock()
         self.live_tasks = 0
         self.target_threads = 1
@@ -328,6 +329,7 @@ def shoot(
     timeout: Optional[int],
     logdir: Optional[str],
     flag_regex: re.Pattern,
+    use_stdout: bool,
 ):
     if timeout is None:
         timeout = 999999999
@@ -351,13 +353,18 @@ def shoot(
 
     hit_timeout = False
     while True:
-        r, _, _ = select.select([proc.stdout], [], [], deadline - time.time())
+        r, _, _ = select.select([proc.stdout], [], [], max(0., deadline - time.time()))
         if not r:
             hit_timeout = True
+            if use_stdout:
+                print('TIMEOUT')
             break
         line = proc.stdout.readline()
         if not line:
             break
+        if use_stdout:
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
         if len(head_buf) < BUF_SIZE:
             head_buf.append(line)
         else:
@@ -367,7 +374,14 @@ def shoot(
                 buf_full = True
 
         for flag in flag_regex.finditer(line):
-            SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
+            while True:
+                try:
+                    SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
+                except queue.Full:
+                    print("Warning: submission queue is full")
+                    time.sleep(5)
+                else:
+                    break
 
     try:
         proc.wait(deadline - time.time())
@@ -379,24 +393,18 @@ def shoot(
     if logdir is not None:
         log_filename = os.path.join(logdir, script + '-' + datetime.datetime.now().isoformat())
         pathlib.Path(log_filename).parent.mkdir(parents=True)
-        fp = open(log_filename, 'wb')
-    else:
-        fp = sys.stdout.buffer
+        with open(log_filename, 'wb') as fp:
+            fp.writelines(head_buf)
+            if buf_full:
+                fp.write(b'...\n')
+            fp.writelines(tail_buf)
+            if hit_timeout:
+                fp.write(b'TIMEOUT\n')
 
-    fp.writelines(head_buf)
-    if buf_full:
-        fp.write(b'...\n')
-    fp.writelines(tail_buf)
-    if hit_timeout:
-        fp.write(b'TIMEOUT\n')
-
-    if logdir is not None:
-        fp.close()
-    else:
-        fp.flush()
 
 SUBMISSIONS_DONE = False
-SUBMISSION_QUEUE = Queue(maxsize=10000)
+SUBMISSION_QUEUE = queue.Queue(maxsize=10000)
+NOTIFIED_SOCKS = []
 
 def submission_routine(server, debounce):
     buffer = set()
@@ -405,7 +413,7 @@ def submission_routine(server, debounce):
         while True:
             try:
                 buffer.add(SUBMISSION_QUEUE.get(block=True, timeout=deadline - time.time()))
-            except Empty:
+            except (queue.Empty, ValueError):  # ValueError = negative timeout
                 break
 
         if buffer:
@@ -423,8 +431,18 @@ def submission_routine(server, debounce):
                 print('Warning: failed to submit flags')
             else:
                 buffer.clear()
-            finally:
-                sock.close()
+            NOTIFIED_SOCKS.append(sock)
+
+def notification_routine():
+    while True:
+        r, _, _ = nclib.select(NOTIFIED_SOCKS, [], [], timeout=1)
+        for sock in r:
+            line = sock.recvln()
+            if not line:
+                NOTIFIED_SOCKS.remove(sock)
+            else:
+                sys.stdout.buffer.write(b'Got points: ' + line)
+                sys.stdout.buffer.flush()
 
 
 def main():
@@ -451,12 +469,15 @@ def main():
     debounce = 5 if isinstance(target_mode, Forever) else 1
     submission_thread = threading.Thread(target=submission_routine, args=(args.server, debounce))
     submission_thread.start()
+    notification_thread = threading.Thread(target=notification_routine, daemon=True)
+    notification_thread.start()
 
     pool.apply(
         mgr,
         timeout=args.timeout,
         logdir=args.logdir,
         flag_regex=get_flag_regex(args.server),
+        use_stdout=not args.no_stdout,
     )
 
     global SUBMISSIONS_DONE
