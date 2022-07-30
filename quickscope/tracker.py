@@ -32,8 +32,7 @@ class Tracker:
         self.lock = threading.Lock()
         self.tick = -1
         self.targets: Dict[Target, TargetStatus] = {}
-        self.service_names: Dict[str, Target] = {}
-        self.script_names: Dict[str, str] = {}  # map from id to name
+        self.script_info: Dict[str, ScriptStatus] = {}  # keyed on hash
         self.script_queues: Dict[str, List[Target]] = defaultdict(list)
 
         assert b'\n' not in self.FLAG_REGEX
@@ -72,8 +71,7 @@ class Tracker:
         submissions = []
         for line in lines.splitlines():
             try:
-                line = line.decode()
-                submission = Submission.parse(line)
+                submission = Submission.from_json(line.decode())
                 submissions.append(submission)
 
             except Exception:
@@ -89,7 +87,7 @@ class Tracker:
 
         for result in results:
             if result.result == SubmissionResult.SELF:
-                self.untarget_host_port(result.submission.target.host, result.submission.target.port)
+                self.untarget_host_port(result.submission.target)
             elif result.result == SubmissionResult.OK:
                 print('BREAD')
                 try:
@@ -117,21 +115,36 @@ class Tracker:
         script_name = sock.readln(max_size=100, timeout=1).strip().decode()
         service_name = sock.readln(max_size=100, timeout=1).strip().decode()
         n = int(sock.readln(max_size=100, timeout=1).strip().decode())
-        self.script_names[script_id] = script_name
+        if script_id not in self.script_info:
+            with self.lock:
+                if script_id not in self.script_info:
+                    self.script_info[script_id] = ScriptStatus(
+                        filename=script_name,
+                        service_name=service_name,
+                        tick_first_seen=self.tick,
+                        tick_last_seen=self.tick,
+                    )
+        self.script_info[script_id].tick_last_seen = self.tick
         targets = self.get_targets_for_script(script_id, service_name, n)
         for target in targets:
-            sock.sendln(target.dump().encode())
+            sock.sendln(target.to_json().encode())
 
     def serve_gettargetsdumb(self, sock: nclib.Netcat):
         service_name = sock.readln(max_size=100, timeout=1).strip().decode()
 
         targets = self.get_targets_for_tick(service_name, self.tick)
         for target in targets:
-            sock.sendln(target.dump().encode())
+            sock.sendln(target.to_json().encode())
 
     def serve_getstatus(self, sock: nclib.Netcat):
-        sock.sendln(b'TODO')
-        breakpoint()
+        result = ShooterStatus(
+            tick=self.tick,
+            script_info=self.script_info,
+            targets=dict(self.targets),
+            tick_timeout=self.TICK_TIMEOUT,
+            retry_timeout=self.RETRY_TIMEOUT,
+        )
+        sock.send(result.to_json().encode())
 
     def scraper_thread(self):
         while True:
@@ -153,12 +166,10 @@ class Tracker:
             self.tick = gamestatus.tick
 
             for target in gamestatus.targets:
-                self.service_names[target.name] = target.target
-
-                if target.target in self.targets:
-                    self.targets[target.target].tick_last_seen = gamestatus.tick
+                if target in self.targets:
+                    self.targets[target].tick_last_seen = gamestatus.tick
                 else:
-                    self.targets[target.target] = TargetStatus(tick_last_seen=gamestatus.tick)
+                    self.targets[target] = TargetStatus(tick_first_seen=gamestatus.tick, tick_last_seen=gamestatus.tick)
 
             to_remove = []
             for target, status in self.targets.items():
@@ -167,10 +178,10 @@ class Tracker:
             for target in to_remove:
                 self.targets.pop(target)
 
-    def untarget_host_port(self, host: str, port: int):
+    def untarget_host_port(self, bad_target):
         with self.lock:
             for target, status in self.targets.items():
-                if target.host == host and target.port == port:
+                if target.same_process(bad_target):
                     status.retired = True
 
     def untarget_target(self, target: Target):
@@ -180,20 +191,19 @@ class Tracker:
             pass
 
     def get_targets_for_script(self, script_id: str, service_name: str, n: int) -> List[Target]:
-        if service_name not in self.service_names:
-            print('Warning: someone requested unknown service', repr(service_name))
-            return []
-
         result = None
+        found_one = False
         with self.lock:
             if len(self.script_queues[script_id]) >= n:
                 result, self.script_queues[script_id] = self.script_queues[script_id][:n], self.script_queues[script_id][n:]
+                found_one = True
 
         if result is None:
             newstuff = []
             for target, status in self.targets.items():
-                if target.port != self.service_names[service_name].port:
+                if target.service.name != service_name:
                     continue
+                found_one = True
                 if status.retired:
                     continue
                 if status.script_status[script_id].runs >= self.RETRY_TIMEOUT:
@@ -206,19 +216,21 @@ class Tracker:
                 self.script_queues[script_id].extend(newstuff)
                 result, self.script_queues[script_id] = self.script_queues[script_id][:n], self.script_queues[script_id][n:]
 
+        if not found_one:
+            print("Warning: someone requested unknown service", repr(service_name))
         return result
 
     def get_targets_for_tick(self, service_name: str, tick: int) -> List[Target]:
-        if service_name not in self.service_names:
-            print('Warning: someone requested unknown service', repr(service_name))
-            return []
-
         result = []
+        found_one = False
         for target, status in self.targets.items():
-            if target.port != self.service_names[service_name].port:
+            if target.service.name != service_name:
                 continue
+            found_one = True
             if status.tick_last_seen != tick:
                 continue
             result.append(target)
 
+        if not found_one:
+            print("Warning: someone requested unknown service", repr(service_name))
         return result

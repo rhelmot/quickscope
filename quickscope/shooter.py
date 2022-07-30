@@ -17,7 +17,8 @@ import queue
 
 import nclib
 
-from .common import PORT, Target, Submission
+from .common import PORT, Target, Submission, Team, Service
+from .statuspage import statuspage
 
 SERVICE_NAME_RE = re.compile(br'x-service-name: ([-\w_=+,./?]+)')
 
@@ -37,6 +38,7 @@ parser.add_argument('--batch', help='Tunes the number of targets which are claim
 parser.add_argument('--logdir', help='Directory to store logs in')
 parser.add_argument('--no-stdout', help='Disable printing exploit logs to stdout', action='store_true')
 parser.add_argument('--timeout', help='Timeout (seconds) for each exploit run', type=int)
+parser.add_argument('--status-html', help='Dump status to file as html and exit')
 
 class NotAnExploit(ValueError):
     pass
@@ -118,7 +120,7 @@ class ScriptManager:
                 self.eof = True
                 return
 
-            self.buffer.extend(Target.parse(line) for line in lines)
+            self.buffer.extend(Target.from_json(line.decode()) for line in lines)
             if not self.buffer:
                 self.eof = True
         elif isinstance(self.target_mode, Everyone):
@@ -133,10 +135,14 @@ class ScriptManager:
                 self.eof = True
                 return
 
-            self.buffer.extend(Target.parse(line) for line in lines)
+            self.buffer.extend(Target.from_json(line.decode()) for line in lines)
             self.eof = True
         elif isinstance(self.target_mode, Single):
-            self.buffer.append(Target(self.target_mode.host, self.target_mode.port, self.target_mode.flag_id))
+            self.buffer.append(Target(
+                team=Team(name=self.target_mode.host, hostname=self.target_mode.host),
+                service=Service(name=str(self.target_mode.port), port=self.target_mode.port),
+                flag_id=self.target_mode.flag_id,
+            ))
             self.eof = True
 
     def __iter__(self):
@@ -264,12 +270,14 @@ class AdaptivePool:
     def load_watcher(self):
         while True:
             self.cpu_utilization = psutil.cpu_percent(1) / 100.0
-            self.mem_utilization = psutil.virtual_memory() / 100.0
+            self.mem_utilization = psutil.virtual_memory().percent / 100.0
 
             if self.live_tasks == self.target_threads and self.cpu_utilization < 0.9 and self.mem_utilization < 0.75:
                 self.target_threads += 1
+                print("Increasing target threads to", self.target_threads)
             elif self.cpu_utilization > 0.99 or self.mem_utilization > 0.95 and self.target_threads > 1:
                 self.target_threads -= 1
+                print("Decreasing target threads to", self.target_threads)
 
             while self.worker_threads and not self.worker_threads[-1].is_alive():
                 self.worker_threads[-1].join()
@@ -334,7 +342,7 @@ def shoot(
     if timeout is None:
         timeout = 999999999
     deadline = time.time() + timeout
-    cmd = [os.path.join('.', os.path.basename(script)), target.host, str(target.port), target.flag_id]
+    cmd = [os.path.join('.', os.path.basename(script)), target.team.hostname, str(target.service.port), target.flag_id]
     if not os.access(script, os.X_OK):
         if script.endswith('.py'):
             cmd.insert(0, 'python3')
@@ -425,7 +433,7 @@ def submission_routine(server, debounce):
                 continue
             try:
                 sock.sendln(b'submit')
-                sock.send(b''.join(s.dump().encode() + b'\n' for s in buffer))
+                sock.send(b''.join(s.to_json().encode() + b'\n' for s in buffer))
             except:
                 traceback.print_exc()
                 print('Warning: failed to submit flags')
@@ -447,6 +455,10 @@ def notification_routine():
 
 def main():
     args = parser.parse_args(sys.argv[1:])
+    if args.status_html:
+        statuspage(args.server, args.status_html)
+        return
+
     target_mode = parse_target_mode(args)
     if args.corpus is not None:
         if args.script is not None:

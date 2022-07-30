@@ -1,47 +1,32 @@
 from typing import List, Dict
 import enum
 from dataclasses import dataclass, field
+from dataclasses_json import dataclass_json, config
 from collections import defaultdict
-import json
 
 PORT = 3356
 
+@dataclass_json
+@dataclass(frozen=True)
+class Team:
+    name: str
+    hostname: str
+
+@dataclass_json
+@dataclass(frozen=True)
+class Service:
+    name: str
+    port: int
+
+@dataclass_json
 @dataclass(frozen=True)
 class Target:
-    host: str
-    port: int
+    team: Team
+    service: Service
     flag_id: str
 
-    def __str__(self):
-        return '%s %d %s' % (self.host, self.port, self.flag_id)
-
-    def same_service(self, other: 'Target'):
-        return self.host == other.host and self.port == other.port
-
-    @classmethod
-    def parse(cls, line: str) -> 'Target':
-        thingy = json.loads(line)
-        return cls(
-            host=thingy['host'],
-            port=thingy['port'],
-            flag_id=thingy['flag_id'],
-        )
-
-    def dump(self) -> str:
-        return json.dumps({
-            'host': self.host,
-            'port': self.port,
-            'flag_id': self.flag_id,
-        })
-
-@dataclass(frozen=True)
-class NamedTarget:
-    """
-    Generally only used for communication inside the tracker
-    (i.e. when scraping the active services)
-    """
-    target: Target
-    name: str
+    def same_process(self, other: 'Target'):
+        return self.team == other.team and self.service == other.service
 
 class SubmissionResult(enum.Enum):
     OK = 'OK'
@@ -51,49 +36,52 @@ class SubmissionResult(enum.Enum):
     SELF = 'SELF'
     ALREADY_SUBMITTED = 'ALREADY_SUBMITTED'
 
+@dataclass_json
 @dataclass(frozen=True)
 class Submission:
-    flag: bytes
+    flag: bytes = field(metadata=config(encoder=lambda b: b.decode('latin-1'), decoder=lambda s: s.encode('latin-1')))
     target: Target
     script: str
-
-    @classmethod
-    def parse(cls, line: str) -> 'Submission':
-        thingy = json.loads(line)
-        return cls(
-            flag=thingy['flag'].encode('latin-1'),
-            target=Target(
-                host=thingy['host'],
-                port=thingy['port'],
-                flag_id=thingy['flag_id']),
-            script=thingy['script']
-        )
-
-    def dump(self) -> str:
-        return json.dumps({
-            'flag': self.flag.decode('latin-1'),
-            'host': self.target.host,
-            'port': self.target.port,
-            'flag_id': self.target.flag_id,
-            'script': self.script,
-        })
 
 @dataclass
 class SubmissionLog:
     submission: Submission
     result: SubmissionResult
 
+@dataclass_json
 @dataclass
-class ScriptStatus:
+class ScriptProgress:
     runs: int = 0
 
+@dataclass_json
 @dataclass
 class TargetStatus:
+    tick_first_seen: int
     tick_last_seen: int
-    script_status: Dict[str, ScriptStatus] = field(default_factory=lambda: defaultdict(ScriptStatus))
+    script_status: Dict[str, ScriptProgress] = field(default_factory=lambda: defaultdict(ScriptProgress))
     retired: bool = False
 
 @dataclass
 class GameStatus:
     tick: int
-    targets: List[NamedTarget]
+    targets: List[Target]
+
+@dataclass_json
+@dataclass
+class ScriptStatus:
+    filename: str
+    service_name: str
+    tick_first_seen: int
+    tick_last_seen: int
+
+@dataclass_json
+@dataclass
+class ShooterStatus:
+    tick: int
+    targets: Dict[Target, TargetStatus] = field(metadata=config(
+        encoder=lambda d: [{"target": t.to_dict(), "status": s.to_dict()} for t, s in d.items()],
+        decoder=lambda l: {Target.from_dict(e['target']): TargetStatus.from_dict(e['status']) for e in l},
+    ))
+    script_info: Dict[str, ScriptStatus]  # keyed on hash
+    tick_timeout: int
+    retry_timeout: int
