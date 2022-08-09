@@ -11,15 +11,13 @@ PORT_BASE=5000
 ORGA_IP=127.0.1.1
 
 for PODSPEC in $(./teams/get_pods.sh); do
-	echo $PODSPEC
 	POD=$(cut -d':' -f 1 <<<"$PODSPEC")
 	IP=$(cut -d':' -f 3 <<<"$PODSPEC")
-	echo $POD
-	echo $IP
 	kubectl port-forward $POD --address=$IP $(($PORT_BASE + 1)) $(($PORT_BASE + 2)) $(($PORT_BASE + 3)) $(($PORT_BASE + 4)) $(($PORT_BASE + 5)) &
 done
 
 kubectl port-forward deploy/orga-$GAME --address=$ORGA_IP 1337 1338 &
+sleep 5
 echo "Port forwarding complete"
 echo " - Kill the connection with ctrl-c"
 echo " - Flag submission at $ORGA_IP:1337"
