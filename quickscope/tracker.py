@@ -4,6 +4,7 @@ import threading
 import nclib
 import time
 import logging
+from typing import List
 
 from .common import *
 
@@ -18,6 +19,13 @@ class Tracker:
         raise NotImplementedError
 
     def submit_flags(self, flags: List[Submission]) -> List[SubmissionLog]:
+        raise NotImplementedError
+
+    def instrument_targets(self, targets: List[Target]) -> List[Target]:
+        """called just before shooting at the given target list - each target in the list will be shot at once
+
+        gives the tracker the ability to record that shooting at a target is occurring and to modify the target list
+        """
         raise NotImplementedError
 
     TICK_TIMEOUT = 3
@@ -62,6 +70,8 @@ class Tracker:
                 self.serve_gettargetsdumb(sock)
             elif line == b'getstatus':
                 self.serve_getstatus(sock)
+            else:
+                raise Exception("not a command", line)
         except Exception:
             logger.exception('Exception in handle()')
         finally:
@@ -128,6 +138,7 @@ class Tracker:
                     )
         self.script_info[script_id].tick_last_seen = self.tick
         targets = self.get_targets_for_script(script_id, service_name, n)
+        targets = self.instrument_targets(targets)
         for target in targets:
             sock.sendln(target.to_json().encode())
 
@@ -135,6 +146,7 @@ class Tracker:
         service_name = sock.readln(max_size=100, timeout=1).strip().decode()
 
         targets = self.get_targets_for_tick(service_name, self.tick)
+        targets = self.instrument_targets(targets)
         for target in targets:
             sock.sendln(target.to_json().encode())
 

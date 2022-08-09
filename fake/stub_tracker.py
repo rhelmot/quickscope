@@ -73,5 +73,8 @@ class StubTracker(Tracker):
         finally:
             sock.close()
 
+    def instrument_targets(self, targets):
+        return targets
+
 if __name__ == '__main__':
     StubTracker.main()
