@@ -1,0 +1,5 @@
+service_1:5001
+service_2:5002
+service_3:5003
+service_4:5004
+service_5:5005

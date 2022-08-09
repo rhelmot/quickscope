@@ -1,0 +1,42 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: team-$TEAM_ID
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: team-$TEAM_ID
+  template:
+    metadata:
+      labels:
+        app: team-$TEAM_ID
+    spec:
+      containers:
+        - name: team
+          image: rhelmot/fake_team:latest
+          ports:
+            - containerPort: 5001
+            - containerPort: 5002
+            - containerPort: 5003
+            - containerPort: 5004
+            - containerPort: 5005
+          env:
+            - name: DIFFICULTY_1
+              value: "$D1"
+            - name: DIFFICULTY_2
+              value: "$D2"
+            - name: DIFFICULTY_3
+              value: "$D3"
+            - name: DIFFICULTY_4
+              value: "$D4"
+            - name: DIFFICULTY_5
+              value: "$D5"
+          resources:
+            requests:
+              memory: '100Mi'
+              cpu: '500m'
+            limits:
+              memory: '100Mi'
+              cpu: '1000m'

@@ -1,0 +1,15 @@
+{
+    "availableTeams": [
+        "127.0.0.1"
+    ],
+
+    "services": {
+        "service_1": {
+            "127.0.0.1": {
+                "1": "FLAGID_1",
+                "2": "FLAGID_2",
+                "3": "FLAGID_3"
+            }
+        }
+    }
+}
