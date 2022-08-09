@@ -9,10 +9,11 @@ import json
 import time
 import threading
 import nclib
+import traceback
 
 # serves flag submission on port 1337
 # serves game status on port 1338
-# reads team list (ips) from argv[1]
+# reads team list (pod:localip) from argv[1]
 # reads service list (name:port) from argv[2]
 
 Service = str
@@ -31,7 +32,7 @@ SERVICES: List[Tuple[Service, Port]] = []
 def update_globals():
     global TEAMS, SERVICES
     with open(sys.argv[1], 'r', encoding='utf-8') as fp:
-        TEAMS = [line.strip() for line in fp]
+        TEAMS = [(line.split(':')[1], line.split(':')[2].strip()) for line in fp]
     with open(sys.argv[2], 'r', encoding='utf-8') as fp:
         SERVICES = [(line.split(':')[0], int(line.split(':')[1])) for line in fp]
 
@@ -101,15 +102,15 @@ def create_tick():
 
     for service, port in SERVICES:
         service_data = {}
-        for team in TEAMS:
+        for pod, ip in TEAMS:
             flag_id = gen_flagid()
             flag = gen_flag()
             try:
-                setflag(team, port, flag_id, flag)
+                setflag(pod, port, flag_id, flag)
             except:
-                pass
+                traceback.print_exc()
             else:
-                service_data[team] = flag_id
+                service_data[ip] = flag_id
                 tick_flags.add(flag)
 
         tick_flag_ids[service] = service_data

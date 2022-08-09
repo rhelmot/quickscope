@@ -1,6 +1,6 @@
 #!/usr/bin/zsh
 
-NUM_TEAMS=200
+NUM_TEAMS=50
 for i in $(seq $NUM_TEAMS); do
 	D1=0
 	D2=$((0.2 * $i / $NUM_TEAMS))

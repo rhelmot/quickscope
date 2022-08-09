@@ -3,15 +3,19 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: team-$TEAM_ID
+  labels:
+    app: team
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: team-$TEAM_ID
+      app: team
+      team: "$TEAM_ID"
   template:
     metadata:
       labels:
-        app: team-$TEAM_ID
+        app: team
+        team: "$TEAM_ID"
     spec:
       containers:
         - name: team

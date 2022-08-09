@@ -1,0 +1,32 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orga-$GAME
+  labels:
+    app: orga
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: orga
+      game: $GAME
+  template:
+    metadata:
+      labels:
+        app: orga
+        game: $GAME
+    spec:
+      containers:
+        - name: orga
+          image: rhelmot/fake_orga:latest
+          ports:
+            - containerPort: 1337
+            - containerPort: 1338
+          resources:
+            requests:
+              memory: '1000Mi'
+              cpu: '1000m'
+            limits:
+              memory: '1000Mi'
+              cpu: '1000m'
