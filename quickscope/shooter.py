@@ -14,6 +14,7 @@ import psutil
 import traceback
 from dataclasses import dataclass
 import queue
+import resource
 
 import nclib
 
@@ -38,6 +39,7 @@ parser.add_argument('--batch', help='Tunes the number of targets which are claim
 parser.add_argument('--logdir', help='Directory to store logs in')
 parser.add_argument('--no-stdout', help='Disable printing exploit logs to stdout', action='store_true')
 parser.add_argument('--timeout', help='Timeout (seconds) for each exploit run', type=int)
+parser.add_argument('--mem-limit', help='Memory limit to impose on exploit scripts (GB)', type=float, default=2)
 parser.add_argument('--status-html', help='Dump status to file as html and exit')
 
 class NotAnExploit(ValueError):
@@ -338,20 +340,35 @@ def shoot(
     logdir: Optional[str],
     flag_regex: re.Pattern,
     use_stdout: bool,
+    mem_limit: float,
 ):
     if timeout is None:
         timeout = 999999999
     deadline = time.time() + timeout
-    cmd = [os.path.join('.', os.path.basename(script)), target.team.hostname, str(target.service.port), target.flag_id]
+    cmd = [os.path.join('.', os.path.basename(script))]
+    env = dict(os.environ)
+    for name in ('host', 'victim', 'enemy'):
+        env[name] = env[name.upper()] = target.team.hostname
+    for name in ('port',):
+        env[name] = env[name.upper()] = str(target.service.port)
+    for name in ('flagid', 'flag_id', 'fid', 'id'):
+        env[name] = env[name.upper()] = target.flag_id
+
     if not os.access(script, os.X_OK):
         if script.endswith('.py'):
             cmd.insert(0, 'python3')
+
+    def preexec_limits():
+        size_bytes = int(mem_limit * 1024 * 1024 * 1024)
+        resource.setrlimit(resource.RLIMIT_STACK, (size_bytes, size_bytes))
+        resource.setrlimit(resource.RLIMIT_DATA, (size_bytes, size_bytes))
 
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        cwd=os.path.dirname(script)
+        cwd=os.path.dirname(script),
+        preexec_fn=preexec_limits,
     )
     LIVE_PROCESSES.add(proc)
     head_buf = []
