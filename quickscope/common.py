@@ -3,6 +3,7 @@ import enum
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json, config
 from collections import defaultdict
+import logging
 
 PORT = 3356
 
@@ -85,3 +86,16 @@ class ShooterStatus:
     script_info: Dict[str, ScriptStatus]  # keyed on hash
     tick_timeout: int
     retry_timeout: int
+
+def setup_logging():
+    """installs logging configuration. run this before any other code"""
+    # TODO: also send the logs to visualizer
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    fm = logging.Formatter(
+        "%(asctime)s - %(name)-25s - %(funcName)-10s - %(levelname)-5s"
+        + " - %(message)s")
+    ch.setFormatter(fm)
+    root.addHandler(ch)
