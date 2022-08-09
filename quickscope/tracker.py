@@ -4,6 +4,8 @@ import threading
 import nclib
 import time
 import logging
+import io
+from typing import List
 
 from .common import *
 
@@ -30,14 +32,26 @@ class Tracker:
     @classmethod
     def main(cls):
         setup_logging()
-        cls().run()
 
-    def __init__(self):
+        root = logging.getLogger()
+        buf = io.StringIO()
+        sh = logging.StreamHandler(buf)
+        sh.setLevel(logging.ERROR)
+        fm = logging.Formatter(
+            "%(asctime)s - %(name)-25s - %(funcName)-10s - %(levelname)-5s - %(message)s")
+        sh.setFormatter(fm)
+        root.addHandler(sh)
+
+        logger.error("test error message")
+        cls(logging_memory=buf).run()
+
+    def __init__(self, logging_memory: io.StringIO):
         self.lock = threading.Lock()
         self.tick = -1
         self.targets: Dict[Target, TargetStatus] = {}
         self.script_info: Dict[str, ScriptStatus] = {}  # keyed on hash
         self.script_queues: Dict[str, List[Target]] = defaultdict(list)
+        self.logging_memory: io.StringIO = logging_memory
 
         assert b'\n' not in self.FLAG_REGEX
 
@@ -145,6 +159,7 @@ class Tracker:
             targets=dict(self.targets),
             tick_timeout=self.TICK_TIMEOUT,
             retry_timeout=self.RETRY_TIMEOUT,
+            error_log=self.logging_memory.getvalue(),
         )
         sock.send(result.to_json().encode())
 

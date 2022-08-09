@@ -11,24 +11,41 @@ import nclib
 
 logger = logging.getLogger(__name__)
 
-STATUS_HTML = """
-<!DOCTYPE html>
+STATUS_HTML = """<!DOCTYPE html>
 <html lang="en-US">
 <head>
     <title>Shooter Status</title>
     <script>
-        function showTick(tick) {
+        var current_tick = null;
+        var current_service = 1;
+        function showTickService(tick, service) {
+            current_tick = tick;
+            current_service = service;
+
             var cards = document.getElementsByClassName("card");
             for (var i = 0; i < cards.length; i++) {
                 var card = cards[i];
-                var card_tick = parseInt(card.attributes["data-tick"].textContent);
-                if (card.attributes["data-role"].textContent === "get") {
+                var card_tick = parseInt(card.dataset.tick);
+                var card_service = card.dataset.service;
+                if (card.dataset.role === "get") {
+                    if (card_tick === tick && card_service === service) {
+                        card.style.display = '';
+                    } else {
+                        card.style.display = 'none';
+                    }
+                } else if (card.dataset.role === "set-service") {
                     if (card_tick === tick) {
                         card.style.display = '';
                     } else {
                         card.style.display = 'none';
                     }
-                } else if (card.attributes["data-role"].textContent === "set") {
+
+                    if (card_service === service) {
+                        card.classList.add("selected")
+                    } else {
+                        card.classList.remove("selected")
+                    }
+                } else if (card.dataset.role === "set-tick") {
                     if (card_tick === tick) {
                         card.classList.add("selected")
                     } else {
@@ -37,27 +54,37 @@ STATUS_HTML = """
                 }
             }
         }
-        
+
         window.onload = function () {
             var cards = document.getElementsByClassName("card");
             var last = null;
             var second_last = null;
             for (var i = 0; i < cards.length; i++) {
                 var card = cards[i];
-                if (card.attributes["data-role"].textContent === "set") {
-                    let card_tick = parseInt(card.attributes["data-tick"].textContent);
+                if (card.dataset.role === "set-tick") {
+                    let card_tick = parseInt(card.dataset.tick);
                     second_last = last;
                     last = card_tick;
                     card.onclick = function () {
-                        console.log(card_tick);
-                        showTick(card_tick);
+                        console.log("tick", card_tick);
+                        showTickService(card_tick, "ALL");
+                    };
+                } else if (card.dataset.role == "set-service") {
+                    let card_service = card.dataset.service;
+                    card.onclick = function () {
+                        console.log("service", card_service);
+                        if (current_service == card_service) {
+                            showTickService(current_tick, "ALL");
+                        } else {
+                            showTickService(current_tick, card_service);
+                        }
                     };
                 }
             }
             if (second_last !== null) {
-                showTick(second_last);
+                showTickService(second_last, "ALL");
             } else if (last !== null) {
-                showTick(last);
+                showTickService(last, "ALL");
             }
         };
     </script>
@@ -107,12 +134,16 @@ STATUS_HTML = """
     <div id="teams">
         %(teams)s
     </div>
+    <div id="title">Error Log</div>
+    <div id="errorlog">
+        <pre><code>%(errorlog)s</code></pre>
+    </div>
 </body>
 </html>
 """
 
 CARD_HTML = """
-<div class="card" data-tick="%(tick)s" data-role="%(role)s">
+<div class="card" data-tick="%(tick)s" data-service="%(service)s" data-role="%(role)s">
     <div class="card-title">%(title)s</div>
     %(chart)s
 </div>
@@ -133,6 +164,7 @@ class TickReport:
     total_shots: int = 0
     flags_by_service: Dict[str, FlagsReport] = field(default_factory=lambda: defaultdict(FlagsReport))
     flags_by_team: Dict[str, FlagsReport] = field(default_factory=lambda: defaultdict(FlagsReport))
+    flags_by_team_service: Dict[Tuple[str, str], FlagsReport] = field(default_factory=lambda: defaultdict(FlagsReport))
 
 def statuspage(server, outfile):
     sock = nclib.Netcat(server)
@@ -169,32 +201,45 @@ def statuspage(server, outfile):
                         pass
 
         report.flags_by_team[target.team.name].total_flags += 1
+        report.flags_by_team_service[(target.team.name, target.service.name)].total_flags += 1
         report.flags_by_service[target.service.name].total_flags += 1
         if status.retired:
             report.flags_by_team[target.team.name].got_flags += 1
+            report.flags_by_team_service[(target.team.name, target.service.name)].got_flags += 1
             report.flags_by_service[target.service.name].got_flags += 1
 
     ticks_html = '\n'.join(CARD_HTML % dict(
         title=f'Tick {tick}',
         chart=build_pie([max(0, ticks[tick].expected_shots - ticks[tick].total_shots), ticks[tick].total_shots], ['yellow', 'blue']),
         tick=tick,
-        role="set",
+        service=0,
+        role="set-tick",
     ) for tick in sorted(ticks))
     services_html = '\n'.join(CARD_HTML % dict(
         title=f'{html.escape(service)}',
         chart=build_pie([max(0, report.total_flags - report.got_flags), report.got_flags], ['red', 'green']),
         tick=tick,
-        role="get",
+        service=service,
+        role="set-service",
     ) for tick, tick_data in ticks.items() for service, report in tick_data.flags_by_service.items()) + '\n'
     teams_html = '\n'.join(CARD_HTML % dict(
-        title=f'{html.escape(team)}',
+        title=f'{html.escape(team)} - {report.got_flags}/{report.total_flags}',
         chart=build_pie([max(0, report.total_flags - report.got_flags), report.got_flags], ['red', 'green']),
         tick=tick,
+        service=service,
+        role="get",
+    ) for tick, tick_data in ticks.items() for (team, service), report in tick_data.flags_by_team_service.items()) + '\n'
+    teams_html += '\n'.join(CARD_HTML % dict(
+        title=f'{html.escape(team)} - {report.got_flags}/{report.total_flags}',
+        chart=build_pie([max(0, report.total_flags - report.got_flags), report.got_flags], ['red', 'green']),
+        tick=tick,
+        service="ALL",
         role="get",
     ) for tick, tick_data in ticks.items() for team, report in tick_data.flags_by_team.items()) + '\n'
 
     with open(outfile, 'w', encoding='utf-8') as fp:
-        fp.write(STATUS_HTML % dict(progress=ticks_html, services=services_html, teams=teams_html))
+        fp.write(STATUS_HTML % dict(progress=ticks_html, services=services_html, teams=teams_html,
+                                    errorlog=data.error_log))
 
 def endpoint(pAngleInRadians, pRadius, pCentreOffsetX, pCentreOffsetY):
     """

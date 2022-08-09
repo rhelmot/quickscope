@@ -86,6 +86,7 @@ class ShooterStatus:
     script_info: Dict[str, ScriptStatus]  # keyed on hash
     tick_timeout: int
     retry_timeout: int
+    error_log: str
 
 def setup_logging():
     """installs logging configuration. run this before any other code"""
