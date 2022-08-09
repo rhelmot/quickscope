@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import queue
 import resource
 import logging
+import signal
 
 import nclib
 
@@ -72,13 +73,13 @@ def parse_target_mode(args) -> TargetMode:
         results.append(Everyone())
     if args.flag_id is not None or args.host is not None or args.port is not None:
         if args.flag_id is None or args.host is None or args.port is None:
-            sys.stderr.write("Must provide all of --host/--port/--flag-id or none at all")
+            sys.stderr.write("Must provide all of --host/--port/--flag-id or none at all\n")
             sys.stderr.flush()
             sys.exit(1)
         results.append(Single(host=args.host, port=args.port, flag_id=args.flag_id))
 
     if len(results) != 1:
-        sys.stderr.write("Must provide exactly one of --everyone, --forever, or --host/--port/--flag-id")
+        sys.stderr.write("Must provide exactly one of --everyone, --forever, or --host/--port/--flag-id\n")
         sys.stderr.flush()
         sys.exit(1)
 
@@ -173,7 +174,7 @@ class ScriptManager:
 class CorpusManager:
     def __init__(self, corpus, server, batch, target_mode):
         if isinstance(target_mode, Single):
-            sys.stderr.write("Error: cannot specify --corpus and --host/--port/--flag-id")
+            sys.stderr.write("Error: cannot specify --corpus and --host/--port/--flag-id\n")
             sys.stderr.flush()
             sys.exit(1)
 
@@ -350,7 +351,8 @@ def shoot(
     if timeout is None:
         timeout = 999999999
     deadline = time.time() + timeout
-    cmd = [os.path.join('.', os.path.basename(script))]
+    cmd = [os.path.join('.', os.path.basename(script)),
+           target.team.hostname, str(target.service.port), target.flag_id]
     env = dict(os.environ)
     for name in ('host', 'victim', 'enemy'):
         env[name] = env[name.upper()] = target.team.hostname
@@ -367,9 +369,11 @@ def shoot(
         size_bytes = int(mem_limit * 1024 * 1024 * 1024)
         resource.setrlimit(resource.RLIMIT_STACK, (size_bytes, size_bytes))
         resource.setrlimit(resource.RLIMIT_DATA, (size_bytes, size_bytes))
+        os.setpgrp()
 
     proc = subprocess.Popen(
         cmd,
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         cwd=os.path.dirname(script),
@@ -474,6 +478,22 @@ def notification_routine():
 
 
 def main():
+    ctrl_c_times = 0
+    def force_exit(*args):
+        nonlocal ctrl_c_times
+        global SUBMISSIONS_DONE
+        if ctrl_c_times == 0:
+            sys.stderr.write("CTRL-C again to force exit\n")
+            sys.stderr.flush()
+            ctrl_c_times += 1
+        else:
+            sys.stderr.write("Cancelling all tasks and exiting\n")
+            sys.stderr.flush()
+            SUBMISSIONS_DONE = True
+            sys.exit()
+
+    signal.signal(signal.SIGINT, force_exit)
+
     args = parser.parse_args(sys.argv[1:])
     if args.status_html:
         statuspage(args.server, args.status_html)
@@ -482,14 +502,14 @@ def main():
     target_mode = parse_target_mode(args)
     if args.corpus is not None:
         if args.script is not None:
-            sys.stderr.write("Error: only specify one of --corpus or --script")
+            sys.stderr.write("Error: only specify one of --corpus or --script\n")
             sys.stderr.flush()
             sys.exit(1)
         mgr = CorpusManager(args.corpus, args.server, args.batch, target_mode)
     elif args.script is not None:
         mgr = ScriptManager(args.script, args.server, args.batch, target_mode, toplevel=True)
     else:
-        sys.stderr.write("Error: must specify one of --corpus or --script")
+        sys.stderr.write("Error: must specify one of --corpus or --script\n")
         sys.stderr.flush()
         sys.exit(1)
 
@@ -512,6 +532,7 @@ def main():
         logdir=args.logdir,
         flag_regex=get_flag_regex(args.server),
         use_stdout=not args.no_stdout,
+        mem_limit=args.mem_limit,
     )
 
     global SUBMISSIONS_DONE

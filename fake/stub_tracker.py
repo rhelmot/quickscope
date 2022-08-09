@@ -18,7 +18,7 @@ class StubTracker(Tracker):
     FLAG_REGEX = b'FLG[A-Za-z0-9+\/=]{8}'
 
     def get_status(self) -> GameStatus:
-        sock = nclib.Netcat('nc localhost 1338')
+        sock = nclib.Netcat('nc 127.0.1.1 1338')
         try:
             game_json = json.loads(sock.recvall().decode())
         finally:
@@ -37,7 +37,7 @@ class StubTracker(Tracker):
         return result
 
     def submit_flags(self, flags: List[Submission]) -> List[SubmissionLog]:
-        sock = nclib.Netcat('nc localhost 1337')
+        sock = nclib.Netcat('nc 127.0.1.1 1337')
         try:
             mapping = {}
             def submit_worker():
