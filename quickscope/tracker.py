@@ -3,8 +3,12 @@ import concurrent.futures
 import threading
 import nclib
 import time
+import logging
 
 from .common import *
+
+
+logger = logging.getLogger(__name__)
 
 class Tracker:
     # HERE'S WHAT YOU IMPLEMENT
