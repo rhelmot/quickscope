@@ -11,15 +11,18 @@ import re
 import hashlib
 import threading
 import psutil
-import traceback
 from dataclasses import dataclass
 import queue
 import resource
+import logging
 
 import nclib
 
-from .common import PORT, Target, Submission, Team, Service
+from .common import PORT, Target, Submission, Team, Service, setup_logging
 from .statuspage import statuspage
+
+
+logger = logging.getLogger(__name__)
 
 SERVICE_NAME_RE = re.compile(br'x-service-name: ([-\w_=+,./?]+)')
 
@@ -69,12 +72,14 @@ def parse_target_mode(args) -> TargetMode:
         results.append(Everyone())
     if args.flag_id is not None or args.host is not None or args.port is not None:
         if args.flag_id is None or args.host is None or args.port is None:
-            print("Must provide all of --host/--port/--flag-id or none at all")
+            sys.stderr.write("Must provide all of --host/--port/--flag-id or none at all")
+            sys.stderr.flush()
             sys.exit(1)
         results.append(Single(host=args.host, port=args.port, flag_id=args.flag_id))
 
     if len(results) != 1:
-        print("Must provide exactly one of --everyone, --forever, or --host/--port/--flag-id")
+        sys.stderr.write("Must provide exactly one of --everyone, --forever, or --host/--port/--flag-id")
+        sys.stderr.flush()
         sys.exit(1)
 
     return results[0]
@@ -118,7 +123,7 @@ class ScriptManager:
             try:
                 lines = sock.recvall(timeout=10).splitlines()
             except nclib.NetcatTimeout:
-                print("Warning: server did not respond with target list")
+                logger.warn("Server did not respond with target list")
                 self.eof = True
                 return
 
@@ -133,7 +138,7 @@ class ScriptManager:
             try:
                 lines = sock.recvall(timeout=10).splitlines()
             except nclib.NetcatTimeout:
-                print("Warning: server did not respond with target list")
+                logger.warn("Server did not respond with target list")
                 self.eof = True
                 return
 
@@ -156,8 +161,7 @@ class ScriptManager:
                 try:
                     self._buffer_targets()
                 except nclib.NetcatError:
-                    traceback.print_exc()
-                    print('Warning: failed to retrieve targets')
+                    logger.exception('Failed to retrieve targets')
             if not self.buffer:
                 if isinstance(self.target_mode, Forever) and self.toplevel:
                     self.eof = False
@@ -169,7 +173,8 @@ class ScriptManager:
 class CorpusManager:
     def __init__(self, corpus, server, batch, target_mode):
         if isinstance(target_mode, Single):
-            print("Error: cannot specify --corpus and --host/--port/--flag-id")
+            sys.stderr.write("Error: cannot specify --corpus and --host/--port/--flag-id")
+            sys.stderr.flush()
             sys.exit(1)
 
         self.corpus = corpus
@@ -191,7 +196,7 @@ class CorpusManager:
                     child = ScriptManager(filename, self.server, self.batch, self.target_mode)
                 except NotAnExploit as e:
                     if e.args:
-                        print(e.args[0])
+                        logger.warn("%s", e.args[0])
                 else:
                     self.children.append(child)
         self.eof = True
@@ -248,7 +253,7 @@ class AsyncPool:
             try:
                 shoot(script, target, *self.args, **self.kwargs)
             except:
-                traceback.print_exc(file=sys.stderr)
+                logger.exception("Failed to shoot")
             finally:
                 self.queue.task_done()
 
@@ -276,10 +281,10 @@ class AdaptivePool:
 
             if self.live_tasks == self.target_threads and self.cpu_utilization < 0.9 and self.mem_utilization < 0.75:
                 self.target_threads += 1
-                print("Increasing target threads to", self.target_threads)
+                logger.info("Increasing target threads to %s", self.target_threads)
             elif self.cpu_utilization > 0.99 or self.mem_utilization > 0.95 and self.target_threads > 1:
                 self.target_threads -= 1
-                print("Decreasing target threads to", self.target_threads)
+                logger.info("Decreasing target threads to %s", self.target_threads)
 
             while self.worker_threads and not self.worker_threads[-1].is_alive():
                 self.worker_threads[-1].join()
@@ -308,7 +313,7 @@ class AdaptivePool:
             try:
                 shoot(script, target, *self.args, **self.kwargs)
             except:
-                traceback.print_exc(file=sys.stderr)
+                logger.exception("Failed to shoot")
             finally:
                 self.queue.task_done()
                 with self.lock:
@@ -403,7 +408,7 @@ def shoot(
                 try:
                     SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
                 except queue.Full:
-                    print("Warning: submission queue is full")
+                    logger.warn("Submission queue is full")
                     time.sleep(5)
                 else:
                     break
@@ -445,15 +450,13 @@ def submission_routine(server, debounce):
             try:
                 sock = nclib.Netcat(server)
             except:
-                traceback.print_exc()
-                print('Warning: could not connect to server for flag submission')
+                logger.exception('Could not connect to server for flag submission')
                 continue
             try:
                 sock.sendln(b'submit')
                 sock.send(b''.join(s.to_json().encode() + b'\n' for s in buffer))
             except:
-                traceback.print_exc()
-                print('Warning: failed to submit flags')
+                logger.exception('Failed to submit flags')
             else:
                 buffer.clear()
             NOTIFIED_SOCKS.append(sock)
@@ -479,13 +482,15 @@ def main():
     target_mode = parse_target_mode(args)
     if args.corpus is not None:
         if args.script is not None:
-            print("Error: only specify one of --corpus or --script")
+            sys.stderr.write("Error: only specify one of --corpus or --script")
+            sys.stderr.flush()
             sys.exit(1)
         mgr = CorpusManager(args.corpus, args.server, args.batch, target_mode)
     elif args.script is not None:
         mgr = ScriptManager(args.script, args.server, args.batch, target_mode, toplevel=True)
     else:
-        print("Error: must specify one of --corpus or --script")
+        sys.stderr.write("Error: must specify one of --corpus or --script")
+        sys.stderr.flush()
         sys.exit(1)
 
     if args.adaptive_procs:
@@ -514,4 +519,5 @@ def main():
     submission_thread.join()
 
 if __name__ == '__main__':
+    setup_logging()
     main()

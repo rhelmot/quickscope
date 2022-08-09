@@ -1,5 +1,4 @@
 import random
-import traceback
 import concurrent.futures
 import threading
 import nclib
@@ -26,6 +25,7 @@ class Tracker:
 
     @classmethod
     def main(cls):
+        setup_logging()
         cls().run()
 
     def __init__(self):
@@ -59,8 +59,7 @@ class Tracker:
             elif line == b'getstatus':
                 self.serve_getstatus(sock)
         except Exception:
-            print('Exception in handle():')
-            traceback.print_exc()
+            logger.exception('Exception in handle()')
         finally:
             sock.close()
 
@@ -75,21 +74,19 @@ class Tracker:
                 submissions.append(submission)
 
             except Exception:
-                print('Exception during submit parsing:')
-                traceback.print_exc()
+                logger.exception('Exception during submit parsing')
 
         try:
             results = self.submit_flags(submissions)
         except Exception:
-            print('Exception during submit:')
-            traceback.print_exc()
+            logger.exception('Exception during submit')
             return
 
         for result in results:
             if result.result == SubmissionResult.SELF:
                 self.untarget_host_port(result.submission.target)
             elif result.result == SubmissionResult.OK:
-                print('BREAD')
+                logger.info('BREAD')
                 try:
                     sock.sendline(result.submission.flag)
                 except BrokenPipeError:
@@ -98,14 +95,15 @@ class Tracker:
             elif result.result == SubmissionResult.ALREADY_SUBMITTED:
                 self.untarget_target(result.submission.target)
             elif result.result == SubmissionResult.INVALID:
-                print('Warning: getting bogus flags for', result.submission.target)
+                logger.warn('getting bogus flags for %s', result.submission.target)
                 pass
             elif result.result == SubmissionResult.UNKNOWN:
                 pass
             elif result.result == SubmissionResult.TOO_OLD:
                 pass
             else:
-                print("Bad submission result:", result.result, "(is your submitter misbehaving?)")
+                logger.error('Bad submission result: %s (is your submitter misbehaving)',
+                             result.result)
 
     def serve_getregex(self, sock: nclib.Netcat):
         sock.sendln(self.FLAG_REGEX)
@@ -151,8 +149,7 @@ class Tracker:
             try:
                 status = self.get_status()
             except Exception:
-                print('Error getting status:')
-                traceback.print_exc()
+                logger.exception('Error getting status')
                 time.sleep(10)
                 continue
 
@@ -217,7 +214,7 @@ class Tracker:
                 result, self.script_queues[script_id] = self.script_queues[script_id][:n], self.script_queues[script_id][n:]
 
         if not found_one:
-            print("Warning: someone requested unknown service", repr(service_name))
+            logger.warn('Someone requested unknown service %s', repr(service_name))
         return result
 
     def get_targets_for_tick(self, service_name: str, tick: int) -> List[Target]:
@@ -232,5 +229,5 @@ class Tracker:
             result.append(target)
 
         if not found_one:
-            print("Warning: someone requested unknown service", repr(service_name))
+            logger.warn('Someone requested unknown service %s', repr(service_name))
         return result

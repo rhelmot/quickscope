@@ -4,8 +4,12 @@ import html
 from collections import defaultdict
 from dataclasses import dataclass, field
 from dataclasses_json import dataclass_json
+import logging
 import math
 import nclib
+
+
+logger = logging.getLogger(__name__)
 
 STATUS_HTML = """
 <!DOCTYPE html>
@@ -138,7 +142,7 @@ def statuspage(server, outfile):
         dicts = json.loads(recved.decode())
         data: ShooterStatus = ShooterStatus.from_dict(dicts)
     except json.decoder.JSONDecodeError:
-        print(recved)
+        logger.exception('JSON decode error for status: %s', recved)
         return
 
     sock.close()
