@@ -1,27 +1,24 @@
 from typing import List, Dict
 import enum
 from dataclasses import dataclass, field
-from dataclasses_json import dataclass_json, config
+from dataclasses_json import config, DataClassJsonMixin
 from collections import defaultdict
 import logging
 
 PORT = 3356
 
-@dataclass_json
 @dataclass(frozen=True)
-class Team:
+class Team(DataClassJsonMixin):
     name: str
     hostname: str
 
-@dataclass_json
 @dataclass(frozen=True)
-class Service:
+class Service(DataClassJsonMixin):
     name: str
     port: int
 
-@dataclass_json
 @dataclass(frozen=True)
-class Target:
+class Target(DataClassJsonMixin):
     team: Team
     service: Service
     flag_id: str
@@ -37,9 +34,8 @@ class SubmissionResult(enum.Enum):
     SELF = 'SELF'
     ALREADY_SUBMITTED = 'ALREADY_SUBMITTED'
 
-@dataclass_json
 @dataclass(frozen=True)
-class Submission:
+class Submission(DataClassJsonMixin):
     flag: bytes = field(metadata=config(encoder=lambda b: b.decode('latin-1'), decoder=lambda s: s.encode('latin-1')))
     target: Target
     script: str
@@ -49,14 +45,12 @@ class SubmissionLog:
     submission: Submission
     result: SubmissionResult
 
-@dataclass_json
 @dataclass
-class ScriptProgress:
+class ScriptProgress(DataClassJsonMixin):
     runs: int = 0
 
-@dataclass_json
 @dataclass
-class TargetStatus:
+class TargetStatus(DataClassJsonMixin):
     tick_first_seen: int
     tick_last_seen: int
     script_status: Dict[str, ScriptProgress] = field(default_factory=lambda: defaultdict(ScriptProgress))
@@ -67,17 +61,15 @@ class GameStatus:
     tick: int
     targets: List[Target]
 
-@dataclass_json
 @dataclass
-class ScriptStatus:
+class ScriptStatus(DataClassJsonMixin):
     filename: str
     service_name: str
     tick_first_seen: int
     tick_last_seen: int
 
-@dataclass_json
 @dataclass
-class ShooterStatus:
+class ShooterStatus(DataClassJsonMixin):
     tick: int
     targets: Dict[Target, TargetStatus] = field(metadata=config(
         encoder=lambda d: [{"target": t.to_dict(), "status": s.to_dict()} for t, s in d.items()],

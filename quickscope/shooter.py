@@ -1,5 +1,5 @@
 import subprocess
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Set
 import pathlib
 import datetime
 import select
@@ -66,7 +66,7 @@ class Forever:
 TargetMode = Union[Single, Everyone, Forever]
 
 def parse_target_mode(args) -> TargetMode:
-    results = []
+    results: List[TargetMode] = []
     if args.forever:
         results.append(Forever())
     if args.everyone:
@@ -107,7 +107,7 @@ class ScriptManager:
         self.batch = batch
         self.target_mode = target_mode
         self.eof = False
-        self.buffer = []
+        self.buffer: List[Target] = []
 
     def _buffer_targets(self):
         if self.eof:
@@ -139,7 +139,7 @@ class ScriptManager:
             try:
                 lines = sock.recvall(timeout=10).splitlines()
             except nclib.NetcatTimeout:
-                logger.warn("Server did not respond with target list")
+                logger.warning("Server did not respond with target list")
                 self.eof = True
                 return
 
@@ -234,7 +234,7 @@ class SynchronousPool:
 
 class AsyncPool:
     def __init__(self, procs: int):
-        self.queue = queue.Queue(maxsize=1)
+        self.queue: queue.Queue[Tuple[str, Target]] = queue.Queue(maxsize=1)
         self.threads = [threading.Thread(target=self.worker, daemon=True) for _ in range(procs)]
         self.args = None
         self.kwargs = None
@@ -326,14 +326,14 @@ def get_script_service_name_and_hash(script) -> Tuple[Optional[str], Optional[st
     match = SERVICE_NAME_RE.search(script_bytes)
     h = hashlib.md5()
     h.update(script_bytes)
-    h = h.hexdigest()
+    hd = h.hexdigest()
     if b'x-shooter-ignore' in script_bytes:
-        return None, h
+        return None, hd
     if match:
-        return match.group(1).decode(), h
+        return match.group(1).decode(), hd
     return None, None
 
-LIVE_PROCESSES = set()
+LIVE_PROCESSES: Set[subprocess.Popen] = set()
 
 def kill_live_processes():
     for proc in list(LIVE_PROCESSES):
@@ -379,9 +379,10 @@ def shoot(
         cwd=os.path.dirname(script),
         preexec_fn=preexec_limits,
     )
+    assert proc.stdout is not None
     LIVE_PROCESSES.add(proc)
-    head_buf = []
-    tail_buf = []
+    head_buf: List[bytes] = []
+    tail_buf: List[bytes] = []
     buf_full = False
     BUF_SIZE = 20
 
@@ -437,7 +438,7 @@ def shoot(
 
 
 SUBMISSIONS_DONE = False
-SUBMISSION_QUEUE = queue.Queue(maxsize=10000)
+SUBMISSION_QUEUE: queue.Queue[Submission] = queue.Queue(maxsize=10000)
 NOTIFIED_SOCKS = []
 
 def submission_routine(server, debounce):
