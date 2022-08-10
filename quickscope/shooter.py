@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 SERVICE_NAME_RE = re.compile(br'x-service-name: ([-\w_=+,./?]+)')
 
-parser = argparse.ArgumentParser('The shooter. Pew pew!')
+parser = argparse.ArgumentParser('quickscope')
 parser.add_argument('--corpus', help='A directory of exploits to fire')
 parser.add_argument('--script', help='A single script to fire')
-parser.add_argument('--server', help='The shooter tracker to connect to', default='172.29.0.3:%d' % PORT)
+parser.add_argument('--server', help='The shooter tracker to connect to', default='172.23.0.5:%d' % PORT)
 parser.add_argument('--procs', help='The level of parallelism to use', type=int)
 parser.add_argument('--adaptive-procs', help='Measure system load to determine level of parallelism',
                     action='store_true')
@@ -234,7 +234,7 @@ class SynchronousPool:
 
 class AsyncPool:
     def __init__(self, procs: int):
-        self.queue: queue.Queue[Tuple[str, Target]] = queue.Queue(maxsize=1)
+        self.queue: "queue.Queue[Tuple[str, Target]]" = queue.Queue(maxsize=1)
         self.threads = [threading.Thread(target=self.worker, daemon=True) for _ in range(procs)]
         self.args = None
         self.kwargs = None
@@ -438,7 +438,7 @@ def shoot(
 
 
 SUBMISSIONS_DONE = False
-SUBMISSION_QUEUE: queue.Queue[Submission] = queue.Queue(maxsize=10000)
+SUBMISSION_QUEUE: "queue.Queue[Submission]" = queue.Queue(maxsize=10000)
 NOTIFIED_SOCKS = []
 
 def submission_routine(server, debounce):
