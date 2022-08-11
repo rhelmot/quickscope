@@ -5,7 +5,9 @@ import nclib
 import time
 import logging
 import io
-from typing import List
+import queue
+import time
+from typing import List, Tuple, Optional
 
 from .common import *
 
@@ -60,6 +62,10 @@ class Tracker:
         self.script_info: Dict[str, ScriptStatus] = {}  # keyed on hash
         self.script_queues: Dict[str, List[Target]] = defaultdict(list)
         self.logging_memory: io.StringIO = logging_memory
+        self.submit_buffer: List[Submission] = []
+        self.submit_buffer_lock = threading.Lock()
+        self.submit_thread = threading.Thread(target=self._submit_thread, daemon=True)
+        self.submit_thread.start()
 
         assert b'\n' not in self.FLAG_REGEX
 
@@ -106,19 +112,42 @@ class Tracker:
 
         try:
             results = self.submit_flags(submissions)
+            self.process_successful_submissions(results, sock)
         except Exception:
             logger.exception('Exception during submit')
-            return
+            with self.submit_buffer_lock:
+                self.submit_buffer += submissions
+            sock.close()
 
+    def _submit_thread(self):
+        while True:
+            time.sleep(10)
+            next_batch = None
+            with self.submit_buffer_lock:
+                if len(self.submit_buffer) > 0:
+                    next_batch = self.submit_buffer
+                    self.submit_buffer = []
+            if next_batch is not None:
+                try:
+                    results = self.submit_flags(next_batch)
+                    self.process_successful_submissions(results, None)
+                except Exception:
+                    logger.exception('Exception during submit retry')
+                    with self.submit_buffer_lock:
+                        self.submit_buffer += next_batch
+
+    def process_successful_submissions(self, results: List[SubmissionLog],
+                                       sock: Optional[nclib.Netcat]=None) -> None:
         for result in results:
             if result.result == SubmissionResult.SELF:
                 self.untarget_host_port(result.submission.target)
             elif result.result == SubmissionResult.OK:
                 logger.info('BREAD')
-                try:
-                    sock.sendline(result.submission.flag)
-                except BrokenPipeError:
-                    pass
+                if sock is not None:
+                    try:
+                        sock.sendline(result.submission.flag)
+                    except BrokenPipeError:
+                        pass
                 self.untarget_target(result.submission.target)
             elif result.result == SubmissionResult.ALREADY_SUBMITTED:
                 self.untarget_target(result.submission.target)
