@@ -4,7 +4,7 @@ import threading
 import nclib
 import io
 import time
-from typing import Optional
+from typing import Optional, Set
 
 from .common import *
 
@@ -138,10 +138,10 @@ class Tracker:
             results: List[SubmissionLog],
             sock: Optional[nclib.Netcat]=None
     ) -> None:
-        submissions = set(submissions)
+        submissions_set = set(submissions)
         for result in results:
             try:
-                submissions.remove(result.submission)
+                submissions_set.remove(result.submission)
             except KeyError:
                 pass
             if result.result == SubmissionResult.SELF:
@@ -172,7 +172,7 @@ class Tracker:
                              result.result)
 
         with self.submit_buffer_lock:
-            self.submit_buffer.extend(submissions)
+            self.submit_buffer.extend(submissions_set)
 
     def serve_getregex(self, sock: nclib.Netcat):
         sock.sendln(self.FLAG_REGEX)
