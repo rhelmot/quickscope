@@ -43,13 +43,14 @@ class Tracker:
         root = logging.getLogger()
         buf = io.StringIO()
         sh = logging.StreamHandler(buf)
-        sh.setLevel(logging.ERROR)
         fm = logging.Formatter(
             "%(asctime)s - %(name)-25s - %(funcName)-10s - %(levelname)-5s - %(message)s")
         sh.setFormatter(fm)
         root.addHandler(sh)
 
-        logger.error("test error message")
+        sh.setLevel(logging.INFO)
+        logger.info("tracker starting on %s:%s", cls.BIND_TO, PORT)
+        sh.setLevel(logging.ERROR)
         cls(logging_memory=buf).run()
 
     def __init__(self, logging_memory: io.StringIO):
