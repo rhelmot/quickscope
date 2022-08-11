@@ -351,8 +351,7 @@ def shoot(
     if timeout is None:
         timeout = 999999999
     deadline = time.time() + timeout
-    cmd = [os.path.join('.', os.path.basename(script)),
-           target.team.hostname, str(target.service.port), target.flag_id]
+    cmd = [os.path.join('.', os.path.basename(script))]
     env = dict(os.environ)
     for name in ('host', 'victim', 'enemy'):
         env[name] = env[name.upper()] = target.team.hostname
@@ -378,6 +377,7 @@ def shoot(
         stderr=subprocess.STDOUT,
         cwd=os.path.dirname(script),
         preexec_fn=preexec_limits,
+        env=env,
     )
     assert proc.stdout is not None
     LIVE_PROCESSES.add(proc)
