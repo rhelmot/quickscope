@@ -2,12 +2,9 @@ import random
 import concurrent.futures
 import threading
 import nclib
-import time
-import logging
 import io
-import queue
 import time
-from typing import List, Tuple, Optional
+from typing import Optional
 
 from .common import *
 
@@ -25,9 +22,11 @@ class Tracker:
         raise NotImplementedError
 
     def instrument_targets(self, targets: List[Target]) -> List[Target]:
-        """called just before shooting at the given target list - each target in the list will be shot at once
+        """
+        This is called just before shooting at the given target list - each target in the list will be shot at once.
 
-        gives the tracker the ability to record that shooting at a target is occurring and to modify the target list
+        This gives the tracker the ability to record that shooting at a target is occurring and to modify the target
+        list, for example, to remove targets with rate-limiting imposed.
         """
         raise NotImplementedError
 
@@ -51,7 +50,7 @@ class Tracker:
         root.addHandler(sh)
 
         sh.setLevel(logging.INFO)
-        logger.info("tracker starting on %s:%s", cls.BIND_TO, PORT)
+        logger.info("Tracker starting on %s:%s", cls.BIND_TO, PORT)
         sh.setLevel(logging.ERROR)
         cls(logging_memory=buf).run()
 
@@ -93,7 +92,7 @@ class Tracker:
             else:
                 raise Exception("not a command", line)
         except Exception:
-            logger.exception('Exception in handle()')
+            logger.exception("Exception in handle()")
         finally:
             sock.close()
 
@@ -108,16 +107,14 @@ class Tracker:
                 submissions.append(submission)
 
             except Exception:
-                logger.exception('Exception during submit parsing')
+                logger.exception("Exception during submit parsing")
 
         try:
             results = self.submit_flags(submissions)
-            self.process_successful_submissions(results, sock)
         except Exception:
-            logger.exception('Exception during submit')
-            with self.submit_buffer_lock:
-                self.submit_buffer += submissions
-            sock.close()
+            logger.exception("Exception during submit")
+            results = []
+        self.process_successful_submissions(submissions, results, sock)
 
     def _submit_thread(self):
         while True:
@@ -130,19 +127,31 @@ class Tracker:
             if next_batch is not None:
                 try:
                     results = self.submit_flags(next_batch)
-                    self.process_successful_submissions(results, None)
                 except Exception:
-                    logger.exception('Exception during submit retry')
-                    with self.submit_buffer_lock:
-                        self.submit_buffer += next_batch
+                    logger.exception("Exception during submit retry")
+                    results = []
+                self.process_successful_submissions(next_batch, results, None)
 
-    def process_successful_submissions(self, results: List[SubmissionLog],
-                                       sock: Optional[nclib.Netcat]=None) -> None:
+    def process_successful_submissions(
+            self,
+            submissions: List[Submission],
+            results: List[SubmissionLog],
+            sock: Optional[nclib.Netcat]=None
+    ) -> None:
+        submissions = set(submissions)
         for result in results:
+            try:
+                submissions.remove(result.submission)
+            except KeyError:
+                pass
             if result.result == SubmissionResult.SELF:
                 self.untarget_host_port(result.submission.target)
             elif result.result == SubmissionResult.OK:
-                logger.info('BREAD')
+                logger.info(
+                    "Got points on %s:%s",
+                    result.submission.target.team.name,
+                    result.submission.target.service.name
+                )
                 if sock is not None:
                     try:
                         sock.sendline(result.submission.flag)
@@ -152,15 +161,18 @@ class Tracker:
             elif result.result == SubmissionResult.ALREADY_SUBMITTED:
                 self.untarget_target(result.submission.target)
             elif result.result == SubmissionResult.INVALID:
-                logger.warn('getting bogus flags for %s', result.submission.target)
+                logger.warning("Getting bogus flags for %s", result.submission.target)
                 pass
             elif result.result == SubmissionResult.UNKNOWN:
                 pass
             elif result.result == SubmissionResult.TOO_OLD:
                 pass
             else:
-                logger.error('Bad submission result: %s (is your submitter misbehaving)',
+                logger.error("Bad submission result: %s (is your submitter misbehaving?)",
                              result.result)
+
+        with self.submit_buffer_lock:
+            self.submit_buffer.extend(submissions)
 
     def serve_getregex(self, sock: nclib.Netcat):
         sock.sendln(self.FLAG_REGEX)
@@ -209,7 +221,7 @@ class Tracker:
             try:
                 status = self.get_status()
             except Exception:
-                logger.exception('Error getting status')
+                logger.exception("Error getting status")
                 time.sleep(10)
                 continue
 
@@ -274,7 +286,7 @@ class Tracker:
                 result, self.script_queues[script_id] = self.script_queues[script_id][:n], self.script_queues[script_id][n:]
 
         if not found_one:
-            logger.warn('Someone requested unknown service %s', repr(service_name))
+            logger.warning("Someone requested unknown service %s", repr(service_name))
         return result
 
     def get_targets_for_tick(self, service_name: str, tick: int) -> List[Target]:
@@ -289,5 +301,5 @@ class Tracker:
             result.append(target)
 
         if not found_one:
-            logger.warn('Someone requested unknown service %s', repr(service_name))
+            logger.warning("Someone requested unknown service %s", repr(service_name))
         return result

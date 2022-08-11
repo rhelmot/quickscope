@@ -1,5 +1,5 @@
+from typing import List, Optional, Tuple, Union, Set, Dict
 import subprocess
-from typing import List, Optional, Tuple, Union, Set
 import pathlib
 import datetime
 import select
@@ -124,7 +124,7 @@ class ScriptManager:
             try:
                 lines = sock.recvall(timeout=10).splitlines()
             except nclib.NetcatTimeout:
-                logger.warn("Server did not respond with target list")
+                logger.warning("Server did not respond with target list")
                 self.eof = True
                 return
 
@@ -197,7 +197,7 @@ class CorpusManager:
                     child = ScriptManager(filename, self.server, self.batch, self.target_mode)
                 except NotAnExploit as e:
                     if e.args:
-                        logger.warn("%s", e.args[0])
+                        logger.warning("%s", e.args[0])
                 else:
                     self.children.append(child)
         self.eof = True
@@ -413,7 +413,7 @@ def shoot(
                 try:
                     SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
                 except queue.Full:
-                    logger.warn("Submission queue is full")
+                    logger.warning("Submission queue is full")
                     time.sleep(5)
                 else:
                     break
@@ -427,7 +427,7 @@ def shoot(
 
     if logdir is not None:
         log_filename = os.path.join(logdir, script + '-' + datetime.datetime.now().isoformat())
-        pathlib.Path(log_filename).parent.mkdir(parents=True)
+        pathlib.Path(log_filename).parent.mkdir(parents=True, exist_ok=True)
         with open(log_filename, 'wb') as fp:
             fp.writelines(head_buf)
             if buf_full:
@@ -440,6 +440,7 @@ def shoot(
 SUBMISSIONS_DONE = False
 SUBMISSION_QUEUE: "queue.Queue[Submission]" = queue.Queue(maxsize=10000)
 NOTIFIED_SOCKS = []
+FLAG_MAPPING: Dict[bytes, Submission] = {}
 
 def submission_routine(server, debounce):
     buffer = set()
@@ -447,9 +448,12 @@ def submission_routine(server, debounce):
         deadline = time.time() + debounce
         while True:
             try:
-                buffer.add(SUBMISSION_QUEUE.get(block=True, timeout=deadline - time.time()))
+                submission = SUBMISSION_QUEUE.get(block=True, timeout=deadline - time.time())
             except (queue.Empty, ValueError):  # ValueError = negative timeout
                 break
+            else:
+                buffer.add(submission)
+                FLAG_MAPPING[submission.flag.strip()] = submission
 
         if buffer:
             try:
@@ -460,6 +464,7 @@ def submission_routine(server, debounce):
             try:
                 sock.sendln(b'submit')
                 sock.send(b''.join(s.to_json().encode() + b'\n' for s in buffer))
+                sock.shutdown_wr()
             except:
                 logger.exception('Failed to submit flags')
             else:
@@ -467,18 +472,22 @@ def submission_routine(server, debounce):
             NOTIFIED_SOCKS.append(sock)
 
 def notification_routine():
-    while True:
+    while not SUBMISSIONS_DONE or NOTIFIED_SOCKS:
         r, _, _ = nclib.select(NOTIFIED_SOCKS, [], [], timeout=1)
         for sock in r:
             line = sock.recvln()
             if not line:
                 NOTIFIED_SOCKS.remove(sock)
             else:
-                sys.stdout.buffer.write(b'Got points: ' + line)
-                sys.stdout.buffer.flush()
+                submission = FLAG_MAPPING.get(line.strip(), None)
+                if submission is None:
+                    logger.warning("Got points on unknown flag?")
+                else:
+                    logger.info("Got points on %s:%s", submission.target.team.name, submission.target.service.name)
 
 
 def main():
+    setup_logging()
     ctrl_c_times = 0
     def force_exit(*args):
         nonlocal ctrl_c_times
@@ -524,7 +533,7 @@ def main():
     debounce = 5 if isinstance(target_mode, Forever) else 1
     submission_thread = threading.Thread(target=submission_routine, args=(args.server, debounce))
     submission_thread.start()
-    notification_thread = threading.Thread(target=notification_routine, daemon=True)
+    notification_thread = threading.Thread(target=notification_routine)
     notification_thread.start()
 
     pool.apply(
@@ -539,7 +548,7 @@ def main():
     global SUBMISSIONS_DONE
     SUBMISSIONS_DONE = True
     submission_thread.join()
+    notification_thread.join()
 
 if __name__ == '__main__':
-    setup_logging()
     main()

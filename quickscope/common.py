@@ -82,7 +82,6 @@ class ShooterStatus(DataClassJsonMixin):
 
 def setup_logging():
     """installs logging configuration. run this before any other code"""
-    # TODO: also send the logs to visualizer
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
     ch = logging.StreamHandler()
