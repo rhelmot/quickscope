@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List, Dict, Optional
 import enum
 from dataclasses import dataclass, field
 from dataclasses_json import config, DataClassJsonMixin
@@ -22,6 +22,7 @@ class Target(DataClassJsonMixin):
     team: Team
     service: Service
     flag_id: str
+    tick: Optional[int] = None
 
     def same_process(self, other: 'Target'):
         return self.team == other.team and self.service == other.service
@@ -83,7 +84,8 @@ class ShooterStatus(DataClassJsonMixin):
 def setup_logging():
     """installs logging configuration. run this before any other code"""
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.INFO)
+    logging.getLogger('quickscope').setLevel('DEBUG')
     ch = logging.StreamHandler()
     ch.setLevel(logging.DEBUG)
     fm = logging.Formatter(

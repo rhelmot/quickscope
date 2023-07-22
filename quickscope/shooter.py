@@ -366,7 +366,7 @@ def shoot(
 
     def preexec_limits():
         size_bytes = int(mem_limit * 1024 * 1024 * 1024)
-        resource.setrlimit(resource.RLIMIT_STACK, (size_bytes, size_bytes))
+        #resource.setrlimit(resource.RLIMIT_STACK, (size_bytes, size_bytes))
         resource.setrlimit(resource.RLIMIT_DATA, (size_bytes, size_bytes))
         os.setpgrp()
 
@@ -375,7 +375,7 @@ def shoot(
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        cwd=os.path.dirname(script),
+        cwd=os.path.dirname(os.path.realpath(script)),
         preexec_fn=preexec_limits,
         env=env,
     )
@@ -420,8 +420,15 @@ def shoot(
 
     try:
         proc.wait(deadline - time.time())
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     except subprocess.TimeoutExpired:
-        proc.kill()
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         proc.wait()
     LIVE_PROCESSES.remove(proc)
 
