@@ -4,7 +4,10 @@ import threading
 import nclib
 import io
 import time
-from typing import Optional, Set
+from typing import Optional
+import pickle
+import sys
+import os
 
 from .common import *
 
@@ -39,7 +42,34 @@ class Tracker:
 
     @classmethod
     def main(cls):
+        database = sys.argv[1] if len(sys.argv) > 1 else None
+
         setup_logging()
+
+        if database is not None and os.path.exists(database):
+            with open(database, 'rb') as fp:
+                inst = pickle.load(fp)
+        else:
+            inst = cls()
+
+        try:
+            inst.run()
+        finally:
+            if database is not None:
+                with open(database, 'wb') as fp:
+                    pickle.dump(inst, fp)
+                print(f'Saved database to {database}')
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.tick = -1
+        self.targets: Dict[Target, TargetStatus] = {}
+        self.script_info: Dict[str, ScriptStatus] = {}  # keyed on hash
+        self.script_queues: Dict[str, List[Target]] = defaultdict(list)
+        self.submit_buffer: List[Submission] = []
+        self.submit_buffer_lock = threading.Lock()
+        self.submit_thread = threading.Thread(target=self._submit_thread, daemon=True)
+        self.submit_thread.start()
 
         root = logging.getLogger()
         buf = io.StringIO()
@@ -50,23 +80,29 @@ class Tracker:
         root.addHandler(sh)
 
         sh.setLevel(logging.INFO)
-        logger.info("Tracker starting on %s:%s", cls.BIND_TO, PORT)
+        logger.info("Tracker starting on %s:%s", self.BIND_TO, PORT)
         sh.setLevel(logging.ERROR)
-        cls(logging_memory=buf).run()
-
-    def __init__(self, logging_memory: io.StringIO):
-        self.lock = threading.Lock()
-        self.tick = -1
-        self.targets: Dict[Target, TargetStatus] = {}
-        self.script_info: Dict[str, ScriptStatus] = {}  # keyed on hash
-        self.script_queues: Dict[str, List[Target]] = defaultdict(list)
-        self.logging_memory: io.StringIO = logging_memory
-        self.submit_buffer: List[Submission] = []
-        self.submit_buffer_lock = threading.Lock()
-        self.submit_thread = threading.Thread(target=self._submit_thread, daemon=True)
-        self.submit_thread.start()
+        self.logging_memory: io.StringIO = buf
 
         assert b'\n' not in self.FLAG_REGEX
+
+    def __getstate__(self):
+        return {
+            '__version__': 1,
+            'tick': self.tick,
+            'targets': self.targets,
+            'script_info': self.script_info,
+            'script_queues': self.script_queues,
+            'submit_buffer': self.submit_buffer,
+        }
+
+    def __setstate__(self, state):
+        version = state.pop('__version__')
+        if version == 1:
+            self.__init__()
+            self.__dict__.update(state)
+        else:
+            raise NotImplementedError("Unsupported database")
 
     def run(self):
         server = nclib.server.TCPServer((self.BIND_TO, PORT))

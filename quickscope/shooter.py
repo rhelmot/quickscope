@@ -283,7 +283,7 @@ class AdaptivePool:
             if self.live_tasks == self.target_threads and self.cpu_utilization < 0.9 and self.mem_utilization < 0.75:
                 self.target_threads += 1
                 logger.info("Increasing target threads to %s", self.target_threads)
-            elif self.cpu_utilization > 0.99 or self.mem_utilization > 0.95 and self.target_threads > 1:
+            elif (self.cpu_utilization > 0.99 or self.mem_utilization > 0.95) and self.target_threads > 1:
                 self.target_threads -= 1
                 logger.info("Decreasing target threads to %s", self.target_threads)
 
