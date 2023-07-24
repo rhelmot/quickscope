@@ -8,6 +8,7 @@ from typing import Optional
 import pickle
 import sys
 import os
+import argparse
 
 from .common import *
 
@@ -41,24 +42,31 @@ class Tracker:
     # DON'T TOUCH THIS
 
     @classmethod
+    def arg_parser(cls):
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--database')
+        parser.add_argument('--flag-log')
+        return parser
+
+    @classmethod
     def main(cls):
-        database = sys.argv[1] if len(sys.argv) > 1 else None
+        args = cls.arg_parser().parse_args()
 
         setup_logging()
 
-        if database is not None and os.path.exists(database):
-            with open(database, 'rb') as fp:
+        if args.database is not None and os.path.exists(args.database):
+            with open(args.database, 'rb') as fp:
                 inst = pickle.load(fp)
         else:
             inst = cls()
 
         try:
-            inst.run()
+            inst.run(args)
         finally:
-            if database is not None:
-                with open(database, 'wb') as fp:
+            if args.database is not None:
+                with open(args.database, 'wb') as fp:
                     pickle.dump(inst, fp)
-                print(f'Saved database to {database}')
+                print(f'Saved database to {args.database}')
 
     def __init__(self):
         self.lock = threading.Lock()
@@ -70,6 +78,7 @@ class Tracker:
         self.submit_buffer_lock = threading.Lock()
         self.submit_thread = threading.Thread(target=self._submit_thread, daemon=True)
         self.submit_thread.start()
+        self.flag_log = None
 
         root = logging.getLogger()
         buf = io.StringIO()
@@ -104,13 +113,20 @@ class Tracker:
         else:
             raise NotImplementedError("Unsupported database")
 
-    def run(self):
+    def run(self, args):
         server = nclib.server.TCPServer((self.BIND_TO, PORT))
         scraper_thread = threading.Thread(target=self.scraper_thread)
         scraper_thread.start()
-        with concurrent.futures.ThreadPoolExecutor(self.WORKER_THREADS) as executor:
-            for client in server:
-                executor.submit(self.handle, client)
+        if args.flag_log is not None:
+            self.flag_log = open(args.flag_log, 'ab')
+        try:
+            with concurrent.futures.ThreadPoolExecutor(self.WORKER_THREADS) as executor:
+                for client in server:
+                    executor.submit(self.handle, client)
+        finally:
+            if self.flag_log is not None:
+                self.flag_log.close()
+                self.flag_log = None
 
     def handle(self, sock: nclib.Netcat):
         try:
@@ -141,9 +157,14 @@ class Tracker:
             try:
                 submission = Submission.from_json(line.decode())
                 submissions.append(submission)
+                if self.flag_log is not None:
+                    self.flag_log.write(submission.flag + b'\n')
 
             except Exception:
                 logger.exception("Exception during submit parsing")
+
+        if self.flag_log is not None:
+            self.flag_log.flush()
 
         try:
             results = self.submit_flags(submissions)
