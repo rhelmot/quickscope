@@ -6,7 +6,6 @@ import io
 import time
 from typing import Optional
 import pickle
-import sys
 import os
 import argparse
 
