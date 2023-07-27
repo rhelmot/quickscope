@@ -7,6 +7,7 @@ from dataclasses_json import dataclass_json
 import logging
 import math
 import nclib
+import http.server
 
 
 logger = logging.getLogger(__name__)
@@ -166,7 +167,21 @@ class TickReport:
     flags_by_team: Dict[str, FlagsReport] = field(default_factory=lambda: defaultdict(FlagsReport))
     flags_by_team_service: Dict[Tuple[str, str], FlagsReport] = field(default_factory=lambda: defaultdict(FlagsReport))
 
-def statuspage(server, outfile):
+class StatusServer(http.server.ThreadingHTTPServer):
+    def __init__(self, bind_address, handler_class, qs_server):
+        super().__init__(bind_address, handler_class)
+        self.qs_server = qs_server
+
+class StatusHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        data = statuspage(self.server.qs_server).encode()
+        self.send_response(http.HTTPStatus.OK)
+        self.send_header("Content-type", 'text/html')
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+def statuspage(server):
     sock = nclib.Netcat(server)
     sock.sendln(b'getstatus')
     recved = sock.recvall()
@@ -175,7 +190,7 @@ def statuspage(server, outfile):
         data: ShooterStatus = ShooterStatus.from_dict(dicts)
     except json.decoder.JSONDecodeError:
         logger.exception('JSON decode error for status: %s', recved)
-        return
+        return 'JSON decode error for status: %s' % recved
 
     sock.close()
 
@@ -237,9 +252,8 @@ def statuspage(server, outfile):
         role="get",
     ) for tick, tick_data in ticks.items() for team, report in tick_data.flags_by_team.items()) + '\n'
 
-    with open(outfile, 'w', encoding='utf-8') as fp:
-        fp.write(STATUS_HTML % dict(progress=ticks_html, services=services_html, teams=teams_html,
-                                    errorlog=data.error_log))
+    return STATUS_HTML % dict(progress=ticks_html, services=services_html, teams=teams_html,
+                                errorlog=data.error_log)
 
 def endpoint(pAngleInRadians, pRadius, pCentreOffsetX, pCentreOffsetY):
     """

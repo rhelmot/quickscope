@@ -20,7 +20,7 @@ import signal
 import nclib
 
 from .common import PORT, Target, Submission, Team, Service, setup_logging
-from .statuspage import statuspage
+from .statuspage import statuspage, StatusServer, StatusHandler
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +45,7 @@ parser.add_argument('--no-stdout', help='Disable printing exploit logs to stdout
 parser.add_argument('--timeout', help='Timeout (seconds) for each exploit run', type=int)
 parser.add_argument('--mem-limit', help='Memory limit to impose on exploit scripts (GB)', type=float, default=2)
 parser.add_argument('--status-html', help='Dump status to file as html and exit')
+parser.add_argument('--status-server', help='Serve status on given addr:port forever')
 
 class NotAnExploit(ValueError):
     pass
@@ -509,11 +510,17 @@ def main():
             SUBMISSIONS_DONE = True
             sys.exit()
 
-    signal.signal(signal.SIGINT, force_exit)
-
     args = parser.parse_args(sys.argv[1:])
     if args.status_html:
-        statuspage(args.server, args.status_html)
+        with open(args.status_html, 'w', encoding='utf-8') as fp:
+            fp.write(statuspage(args.server))
+        return
+    if args.status_server:
+        host, port = args.status_server.split(':')
+        port = int(port)
+        server = StatusServer((host, port), StatusHandler, args.server)
+        print(f'serving on http://{args.status_server}/')
+        server.serve_forever()
         return
 
     target_mode = parse_target_mode(args)
@@ -529,6 +536,8 @@ def main():
         sys.stderr.write("Error: must specify one of --corpus or --script\n")
         sys.stderr.flush()
         sys.exit(1)
+
+    signal.signal(signal.SIGINT, force_exit)
 
     if args.adaptive_procs:
         pool = AdaptivePool()
