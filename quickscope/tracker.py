@@ -1,18 +1,24 @@
+from typing import Optional, List, Dict, Any
+from collections import defaultdict
 import random
 import concurrent.futures
 import threading
 import nclib
 import io
 import time
-from typing import Optional
 import pickle
 import os
 import argparse
+import logging
 
 from .common import *
 
 
 logger = logging.getLogger(__name__)
+
+class ArgsNamespace(argparse.Namespace):
+    database: Optional[str]
+    flag_log: Optional[str]
 
 class Tracker:
     # HERE'S WHAT YOU IMPLEMENT
@@ -41,15 +47,15 @@ class Tracker:
     # DON'T TOUCH THIS
 
     @classmethod
-    def arg_parser(cls):
+    def arg_parser(cls) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser()
         parser.add_argument('--database')
         parser.add_argument('--flag-log')
         return parser
 
     @classmethod
-    def main(cls):
-        args = cls.arg_parser().parse_args()
+    def main(cls) -> None:
+        args = cls.arg_parser().parse_args(namespace=ArgsNamespace())
 
         setup_logging()
 
@@ -67,17 +73,17 @@ class Tracker:
                     pickle.dump(inst, fp)
                 print(f'Saved database to {args.database}')
 
-    def __init__(self):
-        self.lock = threading.Lock()
-        self.tick = -1
+    def __init__(self) -> None:
+        self.lock: threading.Lock = threading.Lock()
+        self.tick: int = -1
         self.targets: Dict[Target, TargetStatus] = {}
         self.script_info: Dict[str, ScriptStatus] = {}  # keyed on hash
         self.script_queues: Dict[str, List[Target]] = defaultdict(list)
         self.submit_buffer: List[Submission] = []
-        self.submit_buffer_lock = threading.Lock()
-        self.submit_thread = threading.Thread(target=self._submit_thread, daemon=True)
+        self.submit_buffer_lock: threading.Lock = threading.Lock()
+        self.submit_thread: threading.Thread = threading.Thread(target=self._submit_thread, daemon=True)
         self.submit_thread.start()
-        self.flag_log = None
+        self.flag_log: Optional[io.IOBase] = None
 
         root = logging.getLogger()
         buf = io.StringIO()
@@ -94,7 +100,7 @@ class Tracker:
 
         assert b'\n' not in self.FLAG_REGEX
 
-    def __getstate__(self):
+    def __getstate__(self) -> Dict[str, Any]:
         return {
             '__version__': 1,
             'tick': self.tick,
@@ -104,15 +110,19 @@ class Tracker:
             'submit_buffer': self.submit_buffer,
         }
 
-    def __setstate__(self, state):
+    def __setstate__(self, state: Dict[str, Any]) -> None:
         version = state.pop('__version__')
         if version == 1:
-            self.__init__()
-            self.__dict__.update(state)
+            self.tick = state['tick']
+            self.targets = state['targets']
+            self.script_info = state['script_info']
+            self.script_queues = state['script_queues']
+            self.submit_buffer = state['submit_buffer']
+            # THIS CONTAINS A BUG. will mypy catch it?
         else:
             raise NotImplementedError("Unsupported database")
 
-    def run(self, args):
+    def run(self, args: ArgsNamespace) -> None:
         server = nclib.server.TCPServer((self.BIND_TO, PORT))
         scraper_thread = threading.Thread(target=self.scraper_thread)
         scraper_thread.start()
@@ -127,7 +137,7 @@ class Tracker:
                 self.flag_log.close()
                 self.flag_log = None
 
-    def handle(self, sock: nclib.Netcat):
+    def handle(self, sock: nclib.Netcat) -> None:
         try:
             line = sock.readln(max_size=100, timeout=1).strip()
             if line == b'submit':
@@ -147,7 +157,7 @@ class Tracker:
         finally:
             sock.close()
 
-    def serve_submit(self, sock: nclib.Netcat):
+    def serve_submit(self, sock: nclib.Netcat) -> None:
         lines = sock.recvall(timeout=1)
         if not lines:
             return
@@ -172,7 +182,7 @@ class Tracker:
             results = []
         self.process_successful_submissions(submissions, results, sock)
 
-    def _submit_thread(self):
+    def _submit_thread(self) -> None:
         while True:
             time.sleep(10)
             next_batch = None
@@ -230,10 +240,10 @@ class Tracker:
         with self.submit_buffer_lock:
             self.submit_buffer.extend(submissions_set)
 
-    def serve_getregex(self, sock: nclib.Netcat):
+    def serve_getregex(self, sock: nclib.Netcat) -> None:
         sock.sendln(self.FLAG_REGEX)
 
-    def serve_gettargets(self, sock: nclib.Netcat):
+    def serve_gettargets(self, sock: nclib.Netcat) -> None:
         script_id = sock.readln(max_size=100, timeout=1).strip().decode()
         script_name = sock.readln(max_size=100, timeout=1).strip().decode()
         service_name = sock.readln(max_size=100, timeout=1).strip().decode()
@@ -253,7 +263,7 @@ class Tracker:
         for target in targets:
             sock.sendln(target.to_json().encode())
 
-    def serve_gettargetsdumb(self, sock: nclib.Netcat):
+    def serve_gettargetsdumb(self, sock: nclib.Netcat) -> None:
         service_name = sock.readln(max_size=100, timeout=1).strip().decode()
 
         targets = self.get_targets_for_tick(service_name, self.tick)
@@ -261,7 +271,7 @@ class Tracker:
         for target in targets:
             sock.sendln(target.to_json().encode())
 
-    def serve_getstatus(self, sock: nclib.Netcat):
+    def serve_getstatus(self, sock: nclib.Netcat) -> None:
         result = ShooterStatus(
             tick=self.tick,
             script_info=self.script_info,
@@ -272,7 +282,7 @@ class Tracker:
         )
         sock.send(result.to_json().encode())
 
-    def scraper_thread(self):
+    def scraper_thread(self) -> None:
         while True:
             try:
                 status = self.get_status()
@@ -286,7 +296,7 @@ class Tracker:
                 continue
             self.ingest_status(status)
 
-    def ingest_status(self, gamestatus: GameStatus):
+    def ingest_status(self, gamestatus: GameStatus) -> None:
         with self.lock:
             self.tick = gamestatus.tick
 
@@ -303,13 +313,13 @@ class Tracker:
             for target in to_remove:
                 self.targets.pop(target)
 
-    def untarget_host_port(self, bad_target):
+    def untarget_host_port(self, bad_target: Target) -> None:
         with self.lock:
             for target, status in self.targets.items():
                 if target.same_process(bad_target):
                     status.retired = True
 
-    def untarget_target(self, target: Target):
+    def untarget_target(self, target: Target) -> None:
         try:
             self.targets[target].retired = True
         except KeyError:

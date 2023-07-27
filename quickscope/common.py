@@ -24,7 +24,7 @@ class Target(DataClassJsonMixin):
     flag_id: str
     tick: Optional[int] = None
 
-    def same_process(self, other: 'Target'):
+    def same_process(self, other: 'Target') -> bool:
         return self.team == other.team and self.service == other.service
 
 class SubmissionResult(enum.Enum):
@@ -81,7 +81,7 @@ class ShooterStatus(DataClassJsonMixin):
     retry_timeout: int
     error_log: str
 
-def setup_logging():
+def setup_logging() -> None:
     """installs logging configuration. run this before any other code"""
     root = logging.getLogger()
     root.setLevel(logging.INFO)

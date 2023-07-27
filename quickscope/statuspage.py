@@ -1,5 +1,5 @@
+from typing import Tuple, Dict, List, Type
 import json.decoder
-from typing import Tuple, Dict, List
 import html
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -168,12 +168,14 @@ class TickReport:
     flags_by_team_service: Dict[Tuple[str, str], FlagsReport] = field(default_factory=lambda: defaultdict(FlagsReport))
 
 class StatusServer(http.server.ThreadingHTTPServer):
-    def __init__(self, bind_address, handler_class, qs_server):
+    def __init__(self, bind_address: Tuple[str, int], handler_class: Type["StatusHandler"], qs_server: str):
         super().__init__(bind_address, handler_class)
-        self.qs_server = qs_server
+        self.qs_server: str = qs_server
 
 class StatusHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
+    server: StatusServer
+
+    def do_GET(self) -> None:
         data = statuspage(self.server.qs_server).encode()
         self.send_response(http.HTTPStatus.OK)
         self.send_header("Content-type", 'text/html')
@@ -181,7 +183,7 @@ class StatusHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-def statuspage(server):
+def statuspage(server: str) -> str:
     sock = nclib.Netcat(server)
     sock.sendln(b'getstatus')
     recved = sock.recvall()
@@ -189,8 +191,8 @@ def statuspage(server):
         dicts = json.loads(recved.decode())
         data: ShooterStatus = ShooterStatus.from_dict(dicts)
     except json.decoder.JSONDecodeError:
-        logger.exception('JSON decode error for status: %s', recved)
-        return 'JSON decode error for status: %s' % recved
+        logger.exception('JSON decode error for status: %r', recved)
+        return 'JSON decode error for status: %r' % recved
 
     sock.close()
 
@@ -255,7 +257,7 @@ def statuspage(server):
     return STATUS_HTML % dict(progress=ticks_html, services=services_html, teams=teams_html,
                                 errorlog=data.error_log)
 
-def endpoint(pAngleInRadians, pRadius, pCentreOffsetX, pCentreOffsetY):
+def endpoint(pAngleInRadians: float, pRadius: float, pCentreOffsetX: float, pCentreOffsetY: float) -> Tuple[float, float]:
     """
     Calculate position of point on circle given an angle, a radius, and the location of the center of the circle
     Zero line points west.
@@ -268,7 +270,7 @@ def endpoint(pAngleInRadians, pRadius, pCentreOffsetX, pCentreOffsetY):
     return (lStartLineDestinationX, lStartLineDestinationY)
 
 # https://drumcoder.co.uk/blog/2010/nov/16/python-code-generate-svg-pie-chart/
-def build_pie(slices, colors):
+def build_pie(slices: List[int], colors: List[str]) -> str:
     if sum(slices) == 0:
         slices = [1]
         colors = ['white']
@@ -279,7 +281,7 @@ def build_pie(slices, colors):
     INNER_RADIUS = 30
     DEGREES_IN_CIRCLE = 360.0
 
-    current_angle = 0
+    current_angle = 0.
     total = sum(slices)
     path_elem = ""
 

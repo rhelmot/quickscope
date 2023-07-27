@@ -1,4 +1,4 @@
-from typing import List, Optional, Tuple, Union, Set, Dict
+from typing import List, Optional, Tuple, Union, Set, Dict, Iterable, Any, Protocol
 import subprocess
 import pathlib
 import datetime
@@ -47,6 +47,25 @@ parser.add_argument('--mem-limit', help='Memory limit to impose on exploit scrip
 parser.add_argument('--status-html', help='Dump status to file as html and exit')
 parser.add_argument('--status-server', help='Serve status on given addr:port forever')
 
+class ShooterArgs(argparse.Namespace):
+    corpus: Optional[str]
+    script: Optional[str]
+    server: str
+    procs: Optional[int]
+    adaptive_procs: bool
+    host: Optional[str]
+    port: Optional[int]
+    flag_id: Optional[str]
+    everyone: Optional[bool]
+    forever: Optional[bool]
+    batch: int
+    logdir: Optional[str]
+    no_stdout: bool
+    timeout: Optional[int]
+    mem_limit: float
+    status_html: Optional[str]
+    status_server: Optional[str]
+
 class NotAnExploit(ValueError):
     pass
 
@@ -66,7 +85,7 @@ class Forever:
 
 TargetMode = Union[Single, Everyone, Forever]
 
-def parse_target_mode(args) -> TargetMode:
+def parse_target_mode(args: ShooterArgs) -> TargetMode:
     results: List[TargetMode] = []
     if args.forever:
         results.append(Forever())
@@ -86,31 +105,33 @@ def parse_target_mode(args) -> TargetMode:
 
     return results[0]
 
-def get_flag_regex(server):
+def get_flag_regex(server: str) -> re.Pattern[bytes]:
     sock = nclib.Netcat(server)
     sock.sendln(b'getregex')
     return re.compile(sock.readln().strip())
 
 class ScriptManager:
-    def __init__(self, script: str, server: str, batch: int, target_mode: TargetMode, toplevel=False):
-        self.server = server
-        self.script_name = script
-        self.toplevel = toplevel
-        self.service_name, self.script_hash = get_script_service_name_and_hash(script)
-        if self.script_hash is None:
+    def __init__(self, script: str, server: str, batch: int, target_mode: TargetMode, toplevel: bool = False):
+        self.server: str = server
+        self.script_name: str = script
+        self.toplevel: bool = toplevel
+        service_name, script_hash = get_script_service_name_and_hash(script)
+        if script_hash is None:
             raise NotAnExploit("Please put `x-service-name: service name` (or x-shooter-ignore) somewhere in " + script)
-        if self.service_name is None:
+        if service_name is None:
             raise NotAnExploit()
+        self.service_name: str = service_name
+        self.script_hash: str = script_hash
         if not os.access(self.script_name, os.X_OK):
             if not self.script_name.endswith('.py'):
                 raise NotAnExploit(script + " is not executable - how do I run it?")
 
-        self.batch = batch
-        self.target_mode = target_mode
-        self.eof = False
+        self.batch: int = batch
+        self.target_mode: TargetMode = target_mode
+        self.eof: bool = False
         self.buffer: List[Target] = []
 
-    def _buffer_targets(self):
+    def _buffer_targets(self) -> None:
         if self.eof:
             return
 
@@ -154,10 +175,10 @@ class ScriptManager:
             ))
             self.eof = True
 
-    def __iter__(self):
+    def __iter__(self) -> "ScriptManager":
         return self
 
-    def __next__(self):
+    def __next__(self) -> Tuple[str, Target]:
         while True:
             if not self.buffer:
                 try:
@@ -173,25 +194,25 @@ class ScriptManager:
             return self.script_name, self.buffer.pop()
 
 class CorpusManager:
-    def __init__(self, corpus, server, batch, target_mode):
+    def __init__(self, corpus: str, server: str, batch: int, target_mode: TargetMode):
         if isinstance(target_mode, Single):
             sys.stderr.write("Error: cannot specify --corpus and --host/--port/--flag-id\n")
             sys.stderr.flush()
             sys.exit(1)
 
-        self.corpus = corpus
-        self.server = server
-        self.batch = batch
-        self.target_mode = target_mode
+        self.corpus: str = corpus
+        self.server: str = server
+        self.batch: int = batch
+        self.target_mode: TargetMode = target_mode
 
-        self.children = []
-        self.eof = False
+        self.children: List[ScriptManager] = []
+        self.eof: bool = False
         self._collect()
 
-    def _collect(self):
+    def _collect(self) -> None:
         if self.eof:
             return
-        for root, dirs, files in os.walk(self.corpus):
+        for root, _, files in os.walk(self.corpus):
             for stem in files:
                 filename = os.path.join(root, stem)
                 try:
@@ -203,10 +224,10 @@ class CorpusManager:
                     self.children.append(child)
         self.eof = True
 
-    def __iter__(self):
+    def __iter__(self) -> "CorpusManager":
         return self
 
-    def __next__(self):
+    def __next__(self) -> Tuple[str, Target]:
         while True:
             if not self.children:
                 self._collect()
@@ -228,8 +249,12 @@ class CorpusManager:
             self.children.append(child)
             return result
 
+class Pool(Protocol):
+    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
+        ...
+
 class SynchronousPool:
-    def apply(self, iterator, *args, **kwargs):
+    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
         for script, target in iterator:
             shoot(script, target, *args, **kwargs)
 
@@ -237,19 +262,19 @@ class AsyncPool:
     def __init__(self, procs: int):
         self.queue: "queue.Queue[Tuple[str, Target]]" = queue.Queue(maxsize=1)
         self.threads = [threading.Thread(target=self.worker, daemon=True) for _ in range(procs)]
-        self.args = None
-        self.kwargs = None
+        self.args: Tuple[Any, ...] = ()
+        self.kwargs: Dict[str, Any] = {}
         for thread in self.threads:
             thread.start()
 
-    def apply(self, iterator, *args, **kwargs):
+    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
         self.args = args
         self.kwargs = kwargs
         for script, target in iterator:
             self.queue.put((script, target), block=True)
         self.queue.join()
 
-    def worker(self):
+    def worker(self) -> None:
         while True:
             script, target = self.queue.get(block=True)
             try:
@@ -262,21 +287,21 @@ class AsyncPool:
 class AdaptivePool:
     # warning: instances of this class will never be garbage collected
 
-    def __init__(self):
-        self.cpu_utilization = 0.0
-        self.mem_utilization = 0.0
-        self.watcher_thread = threading.Thread(target=self.load_watcher, daemon=True)
+    def __init__(self) -> None:
+        self.cpu_utilization: float = 0.0
+        self.mem_utilization: float = 0.0
+        self.watcher_thread: threading.Thread = threading.Thread(target=self.load_watcher, daemon=True)
         self.watcher_thread.start()
         self.worker_threads: List[threading.Thread] = []
 
-        self.args = None
-        self.kwargs = None
-        self.queue = queue.Queue(maxsize=1)
-        self.lock = threading.Lock()
-        self.live_tasks = 0
-        self.target_threads = 1
+        self.args: Tuple[Any, ...] = ()
+        self.kwargs: Dict[str, Any] = {}
+        self.queue: queue.Queue[Tuple[str, Target]] = queue.Queue(maxsize=1)
+        self.lock: threading.Lock = threading.Lock()
+        self.live_tasks: int = 0
+        self.target_threads: int = 1
 
-    def load_watcher(self):
+    def load_watcher(self) -> None:
         while True:
             self.cpu_utilization = psutil.cpu_percent(1) / 100.0
             self.mem_utilization = psutil.virtual_memory().percent / 100.0
@@ -298,14 +323,14 @@ class AdaptivePool:
                 )
                 self.worker_threads[-1].start()
 
-    def apply(self, iterator, *args, **kwargs):
+    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
         self.args = args
         self.kwargs = kwargs
         for script, target in iterator:
             self.queue.put((script, target), block=True)
         self.queue.join()
 
-    def worker(self, ident):
+    def worker(self, ident: int) -> None:
         while True:
             if ident >= self.target_threads:
                 return
@@ -321,7 +346,7 @@ class AdaptivePool:
                 with self.lock:
                     self.live_tasks -= 1
 
-def get_script_service_name_and_hash(script) -> Tuple[Optional[str], Optional[str]]:
+def get_script_service_name_and_hash(script: str) -> Tuple[Optional[str], Optional[str]]:
     with open(script, 'rb') as fp:
         script_bytes = fp.read()
     match = SERVICE_NAME_RE.search(script_bytes)
@@ -334,9 +359,9 @@ def get_script_service_name_and_hash(script) -> Tuple[Optional[str], Optional[st
         return match.group(1).decode(), hd
     return None, None
 
-LIVE_PROCESSES: Set[subprocess.Popen] = set()
+LIVE_PROCESSES: Set[subprocess.Popen[bytes]] = set()
 
-def kill_live_processes():
+def kill_live_processes() -> None:
     for proc in list(LIVE_PROCESSES):
         proc.kill()
 
@@ -345,10 +370,10 @@ def shoot(
     target: Target,
     timeout: Optional[int],
     logdir: Optional[str],
-    flag_regex: re.Pattern,
+    flag_regex: re.Pattern[bytes],
     use_stdout: bool,
     mem_limit: float,
-):
+) -> None:
     if timeout is None:
         timeout = 999999999
     deadline = time.time() + timeout
@@ -365,7 +390,7 @@ def shoot(
         if script.endswith('.py'):
             cmd.insert(0, 'python3')
 
-    def preexec_limits():
+    def preexec_limits() -> None:
         size_bytes = int(mem_limit * 1024 * 1024 * 1024)
         #resource.setrlimit(resource.RLIMIT_STACK, (size_bytes, size_bytes))
         resource.setrlimit(resource.RLIMIT_DATA, (size_bytes, size_bytes))
@@ -445,12 +470,12 @@ def shoot(
                 fp.write(b'TIMEOUT\n')
 
 
-SUBMISSIONS_DONE = False
+SUBMISSIONS_DONE: bool = False
 SUBMISSION_QUEUE: "queue.Queue[Submission]" = queue.Queue(maxsize=10000)
-NOTIFIED_SOCKS = []
+NOTIFIED_SOCKS: List[nclib.Netcat] = []
 FLAG_MAPPING: Dict[bytes, Submission] = {}
 
-def submission_routine(server, debounce):
+def submission_routine(server: str, debounce: Union[int, float]) -> None:
     buffer = set()
     while not SUBMISSIONS_DONE:
         deadline = time.time() + debounce
@@ -479,7 +504,7 @@ def submission_routine(server, debounce):
                 buffer.clear()
             NOTIFIED_SOCKS.append(sock)
 
-def notification_routine():
+def notification_routine() -> None:
     while not SUBMISSIONS_DONE or NOTIFIED_SOCKS:
         r, _, _ = nclib.select(NOTIFIED_SOCKS, [], [], timeout=1)
         for sock in r:
@@ -494,10 +519,10 @@ def notification_routine():
                     logger.info("Got points on %s:%s", submission.target.team.name, submission.target.service.name)
 
 
-def main():
+def main() -> None:
     setup_logging()
     ctrl_c_times = 0
-    def force_exit(*args):
+    def force_exit(*args: Any) -> None:
         nonlocal ctrl_c_times
         global SUBMISSIONS_DONE
         if ctrl_c_times == 0:
@@ -510,19 +535,20 @@ def main():
             SUBMISSIONS_DONE = True
             sys.exit()
 
-    args = parser.parse_args(sys.argv[1:])
+    args = parser.parse_args(sys.argv[1:], namespace=ShooterArgs())
     if args.status_html:
         with open(args.status_html, 'w', encoding='utf-8') as fp:
             fp.write(statuspage(args.server))
         return
     if args.status_server:
-        host, port = args.status_server.split(':')
-        port = int(port)
+        host, port_s = args.status_server.split(':')
+        port = int(port_s)
         server = StatusServer((host, port), StatusHandler, args.server)
         print(f'serving on http://{args.status_server}/')
         server.serve_forever()
         return
 
+    mgr: Iterable[Tuple[str, Target]]
     target_mode = parse_target_mode(args)
     if args.corpus is not None:
         if args.script is not None:
@@ -539,6 +565,7 @@ def main():
 
     signal.signal(signal.SIGINT, force_exit)
 
+    pool: Pool
     if args.adaptive_procs:
         pool = AdaptivePool()
     elif args.procs:
