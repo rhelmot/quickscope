@@ -5,6 +5,13 @@ This entails being able to communicate with a game interface (the *tracker*) and
 
 `pip install quickscope`
 
+## How do I write an exploit?
+
+Write an ordinary script that takes its input as the environment variables `$HOST` and `$FLAG_ID`.
+You should hardcode the port used for the service, unless it is a very special variable service, in which case you should use `$PORT`.
+`chmod +x` the script and make sure it has a shebang.
+You should put the text `x-service-name: servicename` in your script somewhere so that the shooter knows to shoot it against the service `servicename`.
+
 ## How do I launch an exploit?
 
 `quickscope --everyone --script my_exploit.py`
@@ -32,7 +39,7 @@ if __name__ == '__main__':
     MyTracker.main()
 ```
 
-You should implement the values marked as not implemented in tracker.py - this means `FLAG_REGEX`, `get_status`, submit_flags`, and `instrument_targets`.
+You should implement the values marked as not implemented in tracker.py - this means `FLAG_REGEX`, `get_status`, `submit_flags`, and `instrument_targets`.
 See [fake/stub_tracker.py](fake/stub_tracker.py) for an example implementation!
 
 You can then directly run your script and it will start tracking the game.

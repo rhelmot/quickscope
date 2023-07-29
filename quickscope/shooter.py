@@ -117,7 +117,7 @@ class ScriptManager:
         self.toplevel: bool = toplevel
         service_name, script_hash = get_script_service_name_and_hash(script)
         if script_hash is None:
-            raise NotAnExploit("Please put `x-service-name: service name` (or x-shooter-ignore) somewhere in " + script)
+            raise NotAnExploit(f"Please put `x-service-name: service name` somewhere in {script}, or put it in a .shooterignore file")
         if service_name is None:
             raise NotAnExploit()
         self.service_name: str = service_name
@@ -212,9 +212,16 @@ class CorpusManager:
     def _collect(self) -> None:
         if self.eof:
             return
-        for root, _, files in os.walk(self.corpus):
+        ignores = []
+        for root, dirs, files in os.walk(self.corpus):
             for stem in files:
                 filename = os.path.join(root, stem)
+                if stem == '.shooterignore':
+                    with open(filename, 'r') as fp:
+                        lines = fp.read().splitlines()
+                    ignores.extend(os.path.join(root, line) for line in lines)
+                    ignores.extend(os.path.join(root, '**', line) for line in lines)
+                    continue
                 try:
                     child = ScriptManager(filename, self.server, self.batch, self.target_mode)
                 except NotAnExploit as e:
@@ -222,6 +229,8 @@ class CorpusManager:
                         logger.warning("%s", e.args[0])
                 else:
                     self.children.append(child)
+            dirs[:] = [stem for stem in dirs if not any((pathlib.Path(root) / stem).match(pattern) for pattern in ignores)]
+        self.children = [child for child in self.children if not any(pathlib.Path(child.script_name).match(pattern) for pattern in ignores)]
         self.eof = True
 
     def __iter__(self) -> "CorpusManager":
