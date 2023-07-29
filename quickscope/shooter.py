@@ -46,6 +46,7 @@ parser.add_argument('--timeout', help='Timeout (seconds) for each exploit run', 
 parser.add_argument('--mem-limit', help='Memory limit to impose on exploit scripts (GB)', type=float, default=2)
 parser.add_argument('--status-html', help='Dump status to file as html and exit')
 parser.add_argument('--status-server', help='Serve status on given addr:port forever')
+parser.add_argument('--corpus-hints', help='Use the name of the first directory level inside a corpus as a hint for the name of the service a script targets', action='store_true')
 
 class ShooterArgs(argparse.Namespace):
     corpus: Optional[str]
@@ -65,6 +66,7 @@ class ShooterArgs(argparse.Namespace):
     mem_limit: float
     status_html: Optional[str]
     status_server: Optional[str]
+    corpus_hints: bool
 
 class NotAnExploit(ValueError):
     pass
@@ -111,11 +113,11 @@ def get_flag_regex(server: str) -> re.Pattern[bytes]:
     return re.compile(sock.readln().strip())
 
 class ScriptManager:
-    def __init__(self, script: str, server: str, batch: int, target_mode: TargetMode, toplevel: bool = False):
+    def __init__(self, script: str, server: str, batch: int, target_mode: TargetMode, toplevel: bool = False, service_hint: Optional[str] = None):
         self.server: str = server
         self.script_name: str = script
         self.toplevel: bool = toplevel
-        service_name, script_hash = get_script_service_name_and_hash(script)
+        service_name, script_hash = get_script_service_name_and_hash(script, service_hint)
         if script_hash is None:
             raise NotAnExploit(f"Please put `x-service-name: service name` somewhere in {script}, or put it in a .shooterignore file")
         if service_name is None:
@@ -194,7 +196,7 @@ class ScriptManager:
             return self.script_name, self.buffer.pop()
 
 class CorpusManager:
-    def __init__(self, corpus: str, server: str, batch: int, target_mode: TargetMode):
+    def __init__(self, corpus: str, server: str, batch: int, target_mode: TargetMode, subdir_hints: bool = False):
         if isinstance(target_mode, Single):
             sys.stderr.write("Error: cannot specify --corpus and --host/--port/--flag-id\n")
             sys.stderr.flush()
@@ -204,6 +206,7 @@ class CorpusManager:
         self.server: str = server
         self.batch: int = batch
         self.target_mode: TargetMode = target_mode
+        self.subdir_hints: bool = subdir_hints
 
         self.children: List[ScriptManager] = []
         self.eof: bool = False
@@ -214,6 +217,8 @@ class CorpusManager:
             return
         ignores = []
         for root, dirs, files in os.walk(self.corpus):
+            subroot = pathlib.Path(root).relative_to(self.corpus)
+            subdir_hint = subroot.parts[0] if self.subdir_hints and len(subroot.parts) > 1 else None
             for stem in files:
                 filename = os.path.join(root, stem)
                 if stem == '.shooterignore':
@@ -223,7 +228,7 @@ class CorpusManager:
                     ignores.extend(os.path.join(root, '**', line) for line in lines)
                     continue
                 try:
-                    child = ScriptManager(filename, self.server, self.batch, self.target_mode)
+                    child = ScriptManager(filename, self.server, self.batch, self.target_mode, service_hint=subdir_hint)
                 except NotAnExploit as e:
                     if e.args:
                         logger.warning("%s", e.args[0])
@@ -355,7 +360,7 @@ class AdaptivePool:
                 with self.lock:
                     self.live_tasks -= 1
 
-def get_script_service_name_and_hash(script: str) -> Tuple[Optional[str], Optional[str]]:
+def get_script_service_name_and_hash(script: str, service_hint: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
     with open(script, 'rb') as fp:
         script_bytes = fp.read()
     match = SERVICE_NAME_RE.search(script_bytes)
@@ -365,7 +370,10 @@ def get_script_service_name_and_hash(script: str) -> Tuple[Optional[str], Option
     if b'x-shooter-ignore' in script_bytes:
         return None, hd
     if match:
-        return match.group(1).decode(), hd
+        service = match.group(1).decode()
+        return service, hd
+    if service_hint is not None:
+        return service_hint, hd
     return None, None
 
 LIVE_PROCESSES: Set[subprocess.Popen[bytes]] = set()
@@ -564,7 +572,7 @@ def main() -> None:
             sys.stderr.write("Error: only specify one of --corpus or --script\n")
             sys.stderr.flush()
             sys.exit(1)
-        mgr = CorpusManager(args.corpus, args.server, args.batch, target_mode)
+        mgr = CorpusManager(args.corpus, args.server, args.batch, target_mode, args.corpus_hints)
     elif args.script is not None:
         mgr = ScriptManager(args.script, args.server, args.batch, target_mode, toplevel=True)
     else:
