@@ -113,12 +113,12 @@ class Tracker:
     def __setstate__(self, state: Dict[str, Any]) -> None:
         version = state.pop('__version__')
         if version == 1:
+            self.__init__() # type: ignore
             self.tick = state['tick']
             self.targets = state['targets']
             self.script_info = state['script_info']
             self.script_queues = state['script_queues']
             self.submit_buffer = state['submit_buffer']
-            # THIS CONTAINS A BUG. will mypy catch it?
         else:
             raise NotImplementedError("Unsupported database")
 
