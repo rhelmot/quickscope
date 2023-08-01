@@ -220,7 +220,7 @@ class CorpusManager:
     def _collect(self) -> None:
         if self.eof:
             return
-        ignores = []
+        ignores: List[str] = []
         for root, dirs, files in os.walk(self.corpus):
             subroot = pathlib.Path(root).relative_to(self.corpus)
             subdir_hint = subroot.parts[0] if self.subdir_hints and len(subroot.parts) > 1 else None
@@ -500,14 +500,14 @@ def shoot(
     if logdir is not None:
         log_filename = os.path.join(logdir, script, start_time.isoformat() + '.log')
         pathlib.Path(log_filename).parent.mkdir(parents=True, exist_ok=True)
-        with open(log_filename, 'wb') as fp:
-            fp.write(metrics.to_json().encode() + b'\n')
-            fp.writelines(head_buf)
+        with open(log_filename, 'wb') as fp2:
+            fp2.write(metrics.to_json().encode() + b'\n')
+            fp2.writelines(head_buf)
             if buf_full:
-                fp.write(b'...\n')
-            fp.writelines(tail_buf)
+                fp2.write(b'...\n')
+            fp2.writelines(tail_buf)
             if hit_timeout:
-                fp.write(b'TIMEOUT\n')
+                fp2.write(b'TIMEOUT\n')
 
 
 SUBMISSIONS_DONE: bool = False

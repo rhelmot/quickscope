@@ -165,7 +165,7 @@ class Tracker:
         except Exception:
             logger.exception("Exception in handle()")
         finally:
-            if line != 'submetrics':
+            if line != b'submetrics':
                 sock.close()
 
     def serve_pubmetrics(self, sock: nclib.Netcat) -> None:
