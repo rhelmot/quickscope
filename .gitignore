@@ -1,5 +1,8 @@
 *.pyc
 *.egg-info
+*.p
 status.html
 build/
 dist/
+fake/flags.txt
+fake/logs

@@ -539,7 +539,7 @@ def metrics_routine(server: str, debounce: Union[int, float]) -> None:
                 sock.send(b''.join(s.to_json().encode() + b'\n' for s in buffer))
                 sock.close()
             except:
-                logger.exception('Failed to submit flags')
+                logger.exception('Failed to submit metrics')
 
 def submission_routine(server: str, debounce: Union[int, float]) -> None:
     buffer = set()
@@ -561,6 +561,7 @@ def submission_routine(server: str, debounce: Union[int, float]) -> None:
                 logger.exception('Could not connect to server for flag submission')
                 continue
             try:
+                logger.info("Submitting %d flags", len(buffer))
                 sock.sendln(b'submit')
                 sock.send(b''.join(s.to_json().encode() + b'\n' for s in buffer))
                 sock.shutdown_wr()
@@ -626,15 +627,16 @@ def main() -> None:
     debounce = 5 if isinstance(target_mode, Forever) or args.submit else 1
 
     submission_thread = threading.Thread(target=submission_routine, args=(args.server, debounce))
-    submission_thread.start()
     notification_thread = threading.Thread(target=notification_routine)
-    notification_thread.start()
 
     if args.submit:
         if args.script is None or args.host is None or args.port is None:
             sys.stderr.write("Error: must specify --script, --host, and --port so we know the providence of flags")
             sys.stderr.flush()
             sys.exit(1)
+
+        submission_thread.start()
+        notification_thread.start()
 
         assert isinstance(target_mode, Single)
         target = Target(
@@ -645,6 +647,9 @@ def main() -> None:
         submit_routine(args.server, target, args.script)
         SUBMISSIONS_DONE = True
     else:
+        submission_thread.start()
+        notification_thread.start()
+
         mgr: Iterable[Tuple[str, Target]]
         if args.corpus is not None:
             if args.script is not None:

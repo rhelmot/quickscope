@@ -2,7 +2,7 @@
 FROM python:3.8
 
 WORKDIR /root
-RUN apt update && apt install -y strace netcat
+RUN apt update && apt install -y strace netcat-traditional
 RUN pip install nclib
 ADD orga.py /root/orga.py
 ADD teams.txt /root/teams.txt

@@ -11,6 +11,7 @@ import os
 import argparse
 import logging
 import queue
+import IPython
 
 from .common import *
 
@@ -20,6 +21,7 @@ logger = logging.getLogger(__name__)
 class ArgsNamespace(argparse.Namespace):
     database: Optional[str]
     flag_log: Optional[str]
+    shell: bool
 
 class Tracker:
     # HERE'S WHAT YOU IMPLEMENT
@@ -50,8 +52,9 @@ class Tracker:
     @classmethod
     def arg_parser(cls) -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser()
-        parser.add_argument('--database')
-        parser.add_argument('--flag-log')
+        parser.add_argument('--database', help='Use this file for state persistence')
+        parser.add_argument('--flag-log', help='Use this file to log all seen flags')
+        parser.add_argument('--shell', help='Drop into an interactive shell instead of running the tracker', action='store_true')
         return parser
 
     @classmethod
@@ -66,13 +69,19 @@ class Tracker:
         else:
             inst = cls()
 
-        try:
-            inst.run(args)
-        finally:
-            if args.database is not None:
-                with open(args.database, 'wb') as fp:
-                    pickle.dump(inst, fp)
-                print(f'Saved database to {args.database}')
+        if args.shell:
+            IPython.start_ipython(argv=[], user_ns=locals() | globals())
+        else:
+            try:
+                inst.boot()
+                inst.run(args)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                if args.database is not None:
+                    with open(args.database, 'wb') as fp:
+                        pickle.dump(inst, fp)
+                    print(f'Saved database to {args.database}')
 
     def __init__(self) -> None:
         self.lock: threading.Lock = threading.Lock()
@@ -82,13 +91,13 @@ class Tracker:
         self.script_queues: Dict[str, List[Target]] = defaultdict(list)
         self.submit_buffer: List[Submission] = []
         self.submit_buffer_lock: threading.Lock = threading.Lock()
-        self.submit_thread: threading.Thread = threading.Thread(target=self._submit_thread, daemon=True)
-        self.submit_thread.start()
-        self.metrics_thread: threading.Thread = threading.Thread(target=self._metrics_thread, daemon=True)
-        self.metrics_thread.start()
         self.flag_log: Optional[io.IOBase] = None
         self.script_metrics_queue: queue.Queue[ScriptMetrics] = queue.Queue(maxsize=300)
         self.script_metrics_subscribers: Set[nclib.Netcat] = set()
+
+        self.submit_thread: threading.Thread = threading.Thread(target=self._submit_thread, daemon=True)
+        self.metrics_thread: threading.Thread = threading.Thread(target=self._metrics_thread, daemon=True)
+        self.scraper_thread: threading.Thread = threading.Thread(target=self._scraper_thread, daemon=True)
 
         root = logging.getLogger()
         buf = io.StringIO()
@@ -96,14 +105,18 @@ class Tracker:
         fm = logging.Formatter(
             "%(asctime)s - %(name)-25s - %(funcName)-10s - %(levelname)-5s - %(message)s")
         sh.setFormatter(fm)
+        sh.setLevel('WARNING')
         root.addHandler(sh)
 
-        sh.setLevel(logging.INFO)
-        logger.info("Tracker starting on %s:%s", self.BIND_TO, PORT)
-        sh.setLevel(logging.ERROR)
         self.logging_memory: io.StringIO = buf
 
         assert b'\n' not in self.FLAG_REGEX
+
+    def boot(self) -> None:
+        logger.info("Tracker starting on %s:%s", self.BIND_TO, PORT)
+        self.submit_thread.start()
+        self.metrics_thread.start()
+        self.scraper_thread.start()
 
     def __getstate__(self) -> Dict[str, Any]:
         return {
@@ -129,8 +142,6 @@ class Tracker:
 
     def run(self, args: ArgsNamespace) -> None:
         server = nclib.server.TCPServer((self.BIND_TO, PORT))
-        scraper_thread = threading.Thread(target=self.scraper_thread)
-        scraper_thread.start()
         if args.flag_log is not None:
             self.flag_log = open(args.flag_log, 'ab')
         try:
@@ -186,7 +197,7 @@ class Tracker:
                 for sock in list(self.script_metrics_subscribers):
                     try:
                         sock.sendline(metric.to_json().encode())
-                    except nclib.NetcatError:
+                    except (nclib.NetcatError, OSError):
                         self.script_metrics_subscribers.remove(sock)
             except Exception:
                 logger.exception("Exception during metrics broadcast")
@@ -317,7 +328,7 @@ class Tracker:
         )
         sock.send(result.to_json().encode())
 
-    def scraper_thread(self) -> None:
+    def _scraper_thread(self) -> None:
         while True:
             try:
                 status = self.get_status()

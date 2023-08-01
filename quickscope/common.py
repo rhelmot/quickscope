@@ -49,7 +49,7 @@ class ScriptMetrics(DataClassJsonMixin):
     host: str
     target: Target
     start_time: datetime
-    duration: timedelta
+    duration: timedelta = field(metadata=config(encoder=lambda t: t.total_seconds(), decoder=lambda f: timedelta(seconds=f)))
     status: ScriptResult
     flags_seen: int
 

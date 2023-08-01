@@ -37,9 +37,9 @@ class StubTracker(Tracker):
         return result
 
     def submit_flags(self, flags: List[Submission]) -> List[SubmissionLog]:
-        import random
-        if random.uniform(0, 1) < 0.8:
-            return []
+        #import random
+        #if random.uniform(0, 1) < 0.8:
+        #    return []
         sock = nclib.Netcat('nc 127.0.1.1 1337')
         try:
             mapping = {}
