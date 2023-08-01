@@ -1,4 +1,4 @@
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Set, Any
 from collections import defaultdict
 import random
 import concurrent.futures
@@ -10,6 +10,7 @@ import pickle
 import os
 import argparse
 import logging
+import queue
 
 from .common import *
 
@@ -83,7 +84,11 @@ class Tracker:
         self.submit_buffer_lock: threading.Lock = threading.Lock()
         self.submit_thread: threading.Thread = threading.Thread(target=self._submit_thread, daemon=True)
         self.submit_thread.start()
+        self.metrics_thread: threading.Thread = threading.Thread(target=self._metrics_thread, daemon=True)
+        self.metrics_thread.start()
         self.flag_log: Optional[io.IOBase] = None
+        self.script_metrics_queue: queue.Queue[ScriptMetrics] = queue.Queue(maxsize=300)
+        self.script_metrics_subscribers: Set[nclib.Netcat] = set()
 
         root = logging.getLogger()
         buf = io.StringIO()
@@ -138,6 +143,7 @@ class Tracker:
                 self.flag_log = None
 
     def handle(self, sock: nclib.Netcat) -> None:
+        line = b''
         try:
             line = sock.readln(max_size=100, timeout=1).strip()
             if line == b'submit':
@@ -150,12 +156,41 @@ class Tracker:
                 self.serve_gettargetsdumb(sock)
             elif line == b'getstatus':
                 self.serve_getstatus(sock)
+            elif line == b'pubmetrics':
+                self.serve_pubmetrics(sock)
+            elif line == b'submetrics':
+                self.script_metrics_subscribers.add(sock)
             else:
                 raise Exception("not a command", line)
         except Exception:
             logger.exception("Exception in handle()")
         finally:
-            sock.close()
+            if line != 'submetrics':
+                sock.close()
+
+    def serve_pubmetrics(self, sock: nclib.Netcat) -> None:
+        lines = sock.recvall(timeout=1)
+        if not lines:
+            return
+        for line in lines.splitlines():
+            try:
+                metric = ScriptMetrics.from_json(line.decode())
+                self.script_metrics_queue.put(metric)
+            except Exception:
+                logger.exception("Exception during metrics parsing")
+
+    def _metrics_thread(self) -> None:
+        while True:
+            metric = self.script_metrics_queue.get()
+            try:
+                for sock in list(self.script_metrics_subscribers):
+                    try:
+                        sock.sendline(metric.to_json().encode())
+                    except nclib.NetcatError:
+                        self.script_metrics_subscribers.remove(sock)
+            except Exception:
+                logger.exception("Exception during metrics broadcast")
+                time.sleep(10)
 
     def serve_submit(self, sock: nclib.Netcat) -> None:
         lines = sock.recvall(timeout=1)

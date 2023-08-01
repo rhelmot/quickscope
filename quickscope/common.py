@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from dataclasses_json import config, DataClassJsonMixin
 from collections import defaultdict
 import logging
+from datetime import datetime, timedelta
 
 PORT = 3356
 
@@ -21,7 +22,7 @@ class Service(DataClassJsonMixin):
 class Target(DataClassJsonMixin):
     team: Team
     service: Service
-    flag_id: str
+    flag_id: Optional[str] = None
     tick: Optional[int] = None
 
     def same_process(self, other: 'Target') -> bool:
@@ -34,6 +35,23 @@ class SubmissionResult(enum.Enum):
     TOO_OLD = 'TOO_OLD'
     SELF = 'SELF'
     ALREADY_SUBMITTED = 'ALREADY_SUBMITTED'
+
+class ScriptResult(enum.Enum):
+    SUCCESS = "SUCCESS"
+    FAILURE = "FAILURE"
+    TIMEOUT = "TIMEOUT"
+    #ONGOING = "ONGOING"
+
+@dataclass(frozen=True)
+class ScriptMetrics(DataClassJsonMixin):
+    script: str
+    hash: str
+    host: str
+    target: Target
+    start_time: datetime
+    duration: timedelta
+    status: ScriptResult
+    flags_seen: int
 
 @dataclass(frozen=True)
 class Submission(DataClassJsonMixin):

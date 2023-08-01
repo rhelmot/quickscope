@@ -16,10 +16,11 @@ import queue
 import resource
 import logging
 import signal
+import platform
 
 import nclib
 
-from .common import PORT, Target, Submission, Team, Service, setup_logging
+from .common import PORT, Target, Submission, Team, Service, setup_logging, ScriptResult, ScriptMetrics
 from .statuspage import statuspage, StatusServer, StatusHandler
 
 
@@ -47,6 +48,7 @@ parser.add_argument('--mem-limit', help='Memory limit to impose on exploit scrip
 parser.add_argument('--status-html', help='Dump status to file as html and exit')
 parser.add_argument('--status-server', help='Serve status on given addr:port forever')
 parser.add_argument('--corpus-hints', help='Use the name of the first directory level inside a corpus as a hint for the name of the service a script targets', action='store_true')
+parser.add_argument('--submit', help='Pipe stdin to the flag submission service', action='store_true')
 
 class ShooterArgs(argparse.Namespace):
     corpus: Optional[str]
@@ -67,6 +69,9 @@ class ShooterArgs(argparse.Namespace):
     status_html: Optional[str]
     status_server: Optional[str]
     corpus_hints: bool
+    submit: bool
+    service: Optional[str]
+    team: Optional[str]
 
 class NotAnExploit(ValueError):
     pass
@@ -75,7 +80,7 @@ class NotAnExploit(ValueError):
 class Single:
     host: str
     port: int
-    flag_id: str
+    flag_id: Optional[str]
 
 @dataclass
 class Everyone:
@@ -94,8 +99,8 @@ def parse_target_mode(args: ShooterArgs) -> TargetMode:
     if args.everyone:
         results.append(Everyone())
     if args.flag_id is not None or args.host is not None or args.port is not None:
-        if args.flag_id is None or args.host is None or args.port is None:
-            sys.stderr.write("Must provide all of --host/--port/--flag-id or none at all\n")
+        if args.host is None or args.port is None:
+            sys.stderr.write("Must provide both of --host/--port or none at all\n")
             sys.stderr.flush()
             sys.exit(1)
         results.append(Single(host=args.host, port=args.port, flag_id=args.flag_id))
@@ -393,19 +398,29 @@ def shoot(
 ) -> None:
     if timeout is None:
         timeout = 999999999
+    start_time = datetime.datetime.now()
     deadline = time.time() + timeout
     cmd = [os.path.join('.', os.path.basename(script))]
     env = dict(os.environ)
+    for name in ('team', 'team_name', 'teamname'):
+        env[name] = env[name.upper()] = target.team.name
     for name in ('host', 'victim', 'enemy'):
         env[name] = env[name.upper()] = target.team.hostname
     for name in ('port',):
         env[name] = env[name.upper()] = str(target.service.port)
-    for name in ('flagid', 'flag_id', 'fid', 'id'):
-        env[name] = env[name.upper()] = target.flag_id
+    if target.flag_id is not None:
+        for name in ('flagid', 'flag_id', 'fid', 'id'):
+            env[name] = env[name.upper()] = target.flag_id
 
     if not os.access(script, os.X_OK):
         if script.endswith('.py'):
             cmd.insert(0, 'python3')
+
+    with open(script, 'rb') as fp:
+        script_bytes = fp.read()
+    h = hashlib.md5()
+    h.update(script_bytes)
+    script_hash = h.hexdigest()
 
     def preexec_limits() -> None:
         size_bytes = int(mem_limit * 1024 * 1024 * 1024)
@@ -428,6 +443,7 @@ def shoot(
     tail_buf: List[bytes] = []
     buf_full = False
     BUF_SIZE = 20
+    seen_flags = 0
 
     hit_timeout = False
     while True:
@@ -452,6 +468,7 @@ def shoot(
                 buf_full = True
 
         for flag in flag_regex.finditer(line):
+            seen_flags += 1
             while True:
                 try:
                     SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
@@ -462,23 +479,29 @@ def shoot(
                     break
 
     try:
-        proc.wait(deadline - time.time())
+        code = proc.wait(deadline - time.time())
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        status = ScriptResult.SUCCESS if code == 0 else ScriptResult.FAILURE
     except subprocess.TimeoutExpired:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         proc.wait()
+        status = ScriptResult.TIMEOUT
     LIVE_PROCESSES.remove(proc)
 
+    metrics = ScriptMetrics(script=script, hash=script_hash, target=target, start_time = start_time, duration=datetime.datetime.now() - start_time, status=status, flags_seen=seen_flags, host=platform.node())
+    METRICS_QUEUE.put(metrics)
+
     if logdir is not None:
-        log_filename = os.path.join(logdir, script + '-' + datetime.datetime.now().isoformat())
+        log_filename = os.path.join(logdir, script, start_time.isoformat() + '.log')
         pathlib.Path(log_filename).parent.mkdir(parents=True, exist_ok=True)
         with open(log_filename, 'wb') as fp:
+            fp.write(metrics.to_json().encode() + b'\n')
             fp.writelines(head_buf)
             if buf_full:
                 fp.write(b'...\n')
@@ -489,8 +512,34 @@ def shoot(
 
 SUBMISSIONS_DONE: bool = False
 SUBMISSION_QUEUE: "queue.Queue[Submission]" = queue.Queue(maxsize=10000)
+METRICS_QUEUE: "queue.Queue[ScriptMetrics]" = queue.Queue(maxsize=10000)
 NOTIFIED_SOCKS: List[nclib.Netcat] = []
 FLAG_MAPPING: Dict[bytes, Submission] = {}
+
+def metrics_routine(server: str, debounce: Union[int, float]) -> None:
+    while not SUBMISSIONS_DONE:
+        buffer = set()
+        deadline = time.time() + debounce
+        while True:
+            try:
+                metric = METRICS_QUEUE.get(block=True, timeout=deadline - time.time())
+            except (queue.Empty, ValueError):
+                break
+            else:
+                buffer.add(metric)
+
+        if buffer:
+            try:
+                sock = nclib.Netcat(server)
+            except:
+                logger.exception('Could not connect to server for metrics submission')
+                continue
+            try:
+                sock.sendln(b'pubmetrics')
+                sock.send(b''.join(s.to_json().encode() + b'\n' for s in buffer))
+                sock.close()
+            except:
+                logger.exception('Failed to submit flags')
 
 def submission_routine(server: str, debounce: Union[int, float]) -> None:
     buffer = set()
@@ -535,8 +584,14 @@ def notification_routine() -> None:
                 else:
                     logger.info("Got points on %s:%s", submission.target.team.name, submission.target.service.name)
 
+def submit_routine(server: str, target: Target, script: str) -> None:
+    flag_regex = get_flag_regex(server)
+    for line in sys.stdin.buffer:
+        for flag in flag_regex.finditer(line):
+            SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
 
 def main() -> None:
+    global SUBMISSIONS_DONE
     setup_logging()
     ctrl_c_times = 0
     def force_exit(*args: Any) -> None:
@@ -565,48 +620,68 @@ def main() -> None:
         server.serve_forever()
         return
 
-    mgr: Iterable[Tuple[str, Target]]
-    target_mode = parse_target_mode(args)
-    if args.corpus is not None:
-        if args.script is not None:
-            sys.stderr.write("Error: only specify one of --corpus or --script\n")
-            sys.stderr.flush()
-            sys.exit(1)
-        mgr = CorpusManager(args.corpus, args.server, args.batch, target_mode, args.corpus_hints)
-    elif args.script is not None:
-        mgr = ScriptManager(args.script, args.server, args.batch, target_mode, toplevel=True)
-    else:
-        sys.stderr.write("Error: must specify one of --corpus or --script\n")
-        sys.stderr.flush()
-        sys.exit(1)
-
     signal.signal(signal.SIGINT, force_exit)
 
-    pool: Pool
-    if args.adaptive_procs:
-        pool = AdaptivePool()
-    elif args.procs:
-        pool = AsyncPool(args.procs)
-    else:
-        pool = SynchronousPool()
+    target_mode = parse_target_mode(args)
+    debounce = 5 if isinstance(target_mode, Forever) or args.submit else 1
 
-    debounce = 5 if isinstance(target_mode, Forever) else 1
     submission_thread = threading.Thread(target=submission_routine, args=(args.server, debounce))
     submission_thread.start()
     notification_thread = threading.Thread(target=notification_routine)
     notification_thread.start()
 
-    pool.apply(
-        mgr,
-        timeout=args.timeout,
-        logdir=args.logdir,
-        flag_regex=get_flag_regex(args.server),
-        use_stdout=not args.no_stdout,
-        mem_limit=args.mem_limit,
-    )
+    if args.submit:
+        if args.script is None or args.host is None or args.port is None:
+            sys.stderr.write("Error: must specify --script, --host, and --port so we know the providence of flags")
+            sys.stderr.flush()
+            sys.exit(1)
 
-    global SUBMISSIONS_DONE
-    SUBMISSIONS_DONE = True
+        assert isinstance(target_mode, Single)
+        target = Target(
+            team=Team(name=target_mode.host, hostname=target_mode.host),
+            service=Service(name=str(target_mode.port), port=target_mode.port),
+            flag_id=target_mode.flag_id,
+        )
+        submit_routine(args.server, target, args.script)
+        SUBMISSIONS_DONE = True
+    else:
+        mgr: Iterable[Tuple[str, Target]]
+        if args.corpus is not None:
+            if args.script is not None:
+                sys.stderr.write("Error: only specify one of --corpus or --script\n")
+                sys.stderr.flush()
+                sys.exit(1)
+            mgr = CorpusManager(args.corpus, args.server, args.batch, target_mode, args.corpus_hints)
+        elif args.script is not None:
+            mgr = ScriptManager(args.script, args.server, args.batch, target_mode, toplevel=True)
+        else:
+            sys.stderr.write("Error: must specify one of --corpus or --script\n")
+            sys.stderr.flush()
+            sys.exit(1)
+
+        pool: Pool
+        if args.adaptive_procs:
+            pool = AdaptivePool()
+        elif args.procs:
+            pool = AsyncPool(args.procs)
+        else:
+            pool = SynchronousPool()
+
+        metrics_thread = threading.Thread(target=metrics_routine, args=(args.server, debounce))
+        metrics_thread.start()
+
+        pool.apply(
+            mgr,
+            timeout=args.timeout,
+            logdir=args.logdir,
+            flag_regex=get_flag_regex(args.server),
+            use_stdout=not args.no_stdout,
+            mem_limit=args.mem_limit,
+        )
+
+        SUBMISSIONS_DONE = True
+        metrics_thread.join()
+
     submission_thread.join()
     notification_thread.join()
 
