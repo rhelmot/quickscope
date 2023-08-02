@@ -223,14 +223,19 @@ class CorpusManager:
         ignores: List[str] = []
         for root, dirs, files in os.walk(self.corpus):
             subroot = pathlib.Path(root).relative_to(self.corpus)
-            subdir_hint = subroot.parts[0] if self.subdir_hints and len(subroot.parts) > 1 else None
+            subdir_hint = subroot.parts[0] if self.subdir_hints and len(subroot.parts) > 0 and subroot.parts[0] != '.' else None
+
+            if '.shooterignore' in files:
+                with open(os.path.join(root, '.shooterignore'), 'r') as fp:
+                    lines = fp.read().splitlines()
+                ignores.extend(os.path.join(root, line) for line in lines)
+                ignores.extend(os.path.join(root, '**', line) for line in lines)
+
             for stem in files:
-                filename = os.path.join(root, stem)
                 if stem == '.shooterignore':
-                    with open(filename, 'r') as fp:
-                        lines = fp.read().splitlines()
-                    ignores.extend(os.path.join(root, line) for line in lines)
-                    ignores.extend(os.path.join(root, '**', line) for line in lines)
+                    continue
+                filename = os.path.join(root, stem)
+                if any(pathlib.Path(filename).match(pattern) for pattern in ignores):
                     continue
                 try:
                     child = ScriptManager(filename, self.server, self.batch, self.target_mode, service_hint=subdir_hint)
@@ -240,7 +245,6 @@ class CorpusManager:
                 else:
                     self.children.append(child)
             dirs[:] = [stem for stem in dirs if not any((pathlib.Path(root) / stem).match(pattern) for pattern in ignores)]
-        self.children = [child for child in self.children if not any(pathlib.Path(child.script_name).match(pattern) for pattern in ignores)]
         self.eof = True
 
     def __iter__(self) -> "CorpusManager":
