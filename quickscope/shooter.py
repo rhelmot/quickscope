@@ -447,6 +447,7 @@ def shoot(
     tail_buf: List[bytes] = []
     buf_full = False
     BUF_SIZE = 20
+    LINE_SIZE = 1024*4
     seen_flags = 0
 
     hit_timeout = False
@@ -457,7 +458,7 @@ def shoot(
             if use_stdout:
                 print('TIMEOUT')
             break
-        line = proc.stdout.readline()
+        line = proc.stdout.readline(LINE_SIZE)
         if not line:
             break
         if use_stdout:
