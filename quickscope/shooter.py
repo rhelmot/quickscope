@@ -31,7 +31,7 @@ SERVICE_NAME_RE = re.compile(br'x-service-name: ([-\w_=+,./?]+)')
 parser = argparse.ArgumentParser('quickscope')
 parser.add_argument('--corpus', help='A directory of exploits to fire')
 parser.add_argument('--script', help='A single script to fire')
-parser.add_argument('--server', help='The shooter tracker to connect to', default='172.23.0.5:%d' % PORT)
+parser.add_argument('--server', help='The shooter tracker to connect to', default='172.31.2.25:%d' % PORT)
 parser.add_argument('--procs', help='The level of parallelism to use', type=int)
 parser.add_argument('--adaptive-procs', help='Measure system load to determine level of parallelism',
                     action='store_true')
