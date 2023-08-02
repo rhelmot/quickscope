@@ -45,13 +45,16 @@ class ScriptResult(enum.Enum):
 @dataclass(frozen=True)
 class ScriptMetrics(DataClassJsonMixin):
     script: str
-    hash: str
+    script_hash: str
+    corpus_hash: Optional[str]
     host: str
     target: Target
     start_time: datetime
     duration: timedelta = field(metadata=config(encoder=lambda t: t.total_seconds(), decoder=lambda f: timedelta(seconds=f)))
     status: ScriptResult
+    exit_code: int
     flags_seen: int
+    flags: str
 
 @dataclass(frozen=True)
 class Submission(DataClassJsonMixin):

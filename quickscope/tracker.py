@@ -70,7 +70,7 @@ class Tracker:
             inst = cls()
 
         if args.shell:
-            IPython.start_ipython(argv=[], user_ns=locals() | globals())
+            IPython.start_ipython(argv=[], user_ns=locals() | globals())  # type: ignore
         else:
             try:
                 inst.boot()

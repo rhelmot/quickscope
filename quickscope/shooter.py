@@ -118,9 +118,10 @@ def get_flag_regex(server: str) -> re.Pattern[bytes]:
     return re.compile(sock.readln().strip())
 
 class ScriptManager:
-    def __init__(self, script: str, server: str, batch: int, target_mode: TargetMode, toplevel: bool = False, service_hint: Optional[str] = None):
+    def __init__(self, script: str, server: str, batch: int, target_mode: TargetMode, script_shortname: str, toplevel: bool = False, service_hint: Optional[str] = None):
         self.server: str = server
         self.script_name: str = script
+        self.script_shortname = script_shortname
         self.toplevel: bool = toplevel
         service_name, script_hash = get_script_service_name_and_hash(script, service_hint)
         if script_hash is None:
@@ -185,7 +186,7 @@ class ScriptManager:
     def __iter__(self) -> "ScriptManager":
         return self
 
-    def __next__(self) -> Tuple[str, Target]:
+    def __next__(self) -> Tuple[str, str, Target]:
         while True:
             if not self.buffer:
                 try:
@@ -198,7 +199,7 @@ class ScriptManager:
                     time.sleep(4)
                     continue
                 raise StopIteration()
-            return self.script_name, self.buffer.pop()
+            return self.script_name, self.script_shortname, self.buffer.pop()
 
 class CorpusManager:
     def __init__(self, corpus: str, server: str, batch: int, target_mode: TargetMode, subdir_hints: bool = False):
@@ -238,7 +239,7 @@ class CorpusManager:
                 if any(pathlib.Path(filename).match(pattern) for pattern in ignores):
                     continue
                 try:
-                    child = ScriptManager(filename, self.server, self.batch, self.target_mode, service_hint=subdir_hint)
+                    child = ScriptManager(filename, self.server, self.batch, self.target_mode, str(pathlib.Path(filename).relative_to(self.corpus)), service_hint=subdir_hint)
                 except NotAnExploit as e:
                     if e.args:
                         logger.warning("%s", e.args[0])
@@ -250,7 +251,7 @@ class CorpusManager:
     def __iter__(self) -> "CorpusManager":
         return self
 
-    def __next__(self) -> Tuple[str, Target]:
+    def __next__(self) -> Tuple[str, str, Target]:
         while True:
             if not self.children:
                 self._collect()
@@ -273,35 +274,37 @@ class CorpusManager:
             return result
 
 class Pool(Protocol):
-    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
+    def apply(self, iterator: Iterable[Tuple[str, str, Target]], *args: Any, **kwargs: Any) -> None:
         ...
 
 class SynchronousPool:
-    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
-        for script, target in iterator:
-            shoot(script, target, *args, **kwargs)
+    def apply(self, iterator: Iterable[Tuple[str, str, Target]], *args: Any, **kwargs: Any) -> None:
+        for script, script_shortname, target in iterator:
+            kwargss: Dict[str, Any] = kwargs | {'script_shortname': script_shortname}
+            shoot(script, target, *args, **kwargss)
 
 class AsyncPool:
     def __init__(self, procs: int):
-        self.queue: "queue.Queue[Tuple[str, Target]]" = queue.Queue(maxsize=1)
+        self.queue: "queue.Queue[Tuple[str, str, Target]]" = queue.Queue(maxsize=1)
         self.threads = [threading.Thread(target=self.worker, daemon=True) for _ in range(procs)]
         self.args: Tuple[Any, ...] = ()
         self.kwargs: Dict[str, Any] = {}
         for thread in self.threads:
             thread.start()
 
-    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
+    def apply(self, iterator: Iterable[Tuple[str, str, Target]], *args: Any, **kwargs: Any) -> None:
         self.args = args
         self.kwargs = kwargs
-        for script, target in iterator:
-            self.queue.put((script, target), block=True)
+        for script, shortname, target in iterator:
+            self.queue.put((script, shortname, target), block=True)
         self.queue.join()
 
     def worker(self) -> None:
         while True:
-            script, target = self.queue.get(block=True)
+            script, shortname, target = self.queue.get(block=True)
             try:
-                shoot(script, target, *self.args, **self.kwargs)
+                kwargs: Dict[str, Any] = self.kwargs | {'script_shortname': shortname}
+                shoot(script, target, *self.args, **kwargs)
             except:
                 logger.exception("Failed to shoot")
             finally:
@@ -319,7 +322,7 @@ class AdaptivePool:
 
         self.args: Tuple[Any, ...] = ()
         self.kwargs: Dict[str, Any] = {}
-        self.queue: queue.Queue[Tuple[str, Target]] = queue.Queue(maxsize=1)
+        self.queue: queue.Queue[Tuple[str, str, Target]] = queue.Queue(maxsize=1)
         self.lock: threading.Lock = threading.Lock()
         self.live_tasks: int = 0
         self.target_threads: int = 1
@@ -346,22 +349,23 @@ class AdaptivePool:
                 )
                 self.worker_threads[-1].start()
 
-    def apply(self, iterator: Iterable[Tuple[str, Target]], *args: Any, **kwargs: Any) -> None:
+    def apply(self, iterator: Iterable[Tuple[str, str, Target]], *args: Any, **kwargs: Any) -> None:
         self.args = args
         self.kwargs = kwargs
-        for script, target in iterator:
-            self.queue.put((script, target), block=True)
+        for script, shortname, target in iterator:
+            self.queue.put((script, shortname, target), block=True)
         self.queue.join()
 
     def worker(self, ident: int) -> None:
         while True:
             if ident >= self.target_threads:
                 return
-            script, target = self.queue.get(block=True)
+            script, shortname, target = self.queue.get(block=True)
             with self.lock:
                 self.live_tasks += 1
             try:
-                shoot(script, target, *self.args, **self.kwargs)
+                kwargs: Dict[str, Any] = self.kwargs | {'script_shortname': shortname}
+                shoot(script, target, *self.args, **kwargs)
             except:
                 logger.exception("Failed to shoot")
             finally:
@@ -399,6 +403,8 @@ def shoot(
     flag_regex: re.Pattern[bytes],
     use_stdout: bool,
     mem_limit: float,
+    script_shortname: Optional[str] = None,
+    corpus_hash: Optional[str] = None,
 ) -> None:
     if timeout is None:
         timeout = 999999999
@@ -448,7 +454,7 @@ def shoot(
     buf_full = False
     BUF_SIZE = 20
     LINE_SIZE = 1024*4
-    seen_flags = 0
+    seen_flags: List[bytes] = []
 
     hit_timeout = False
     while True:
@@ -473,7 +479,7 @@ def shoot(
                 buf_full = True
 
         for flag in flag_regex.finditer(line):
-            seen_flags += 1
+            seen_flags.append(flag.group(0))
             while True:
                 try:
                     SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
@@ -495,11 +501,23 @@ def shoot(
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        proc.wait()
+        code = proc.wait()
         status = ScriptResult.TIMEOUT
     LIVE_PROCESSES.remove(proc)
 
-    metrics = ScriptMetrics(script=script, hash=script_hash, target=target, start_time = start_time, duration=datetime.datetime.now() - start_time, status=status, flags_seen=seen_flags, host=platform.node())
+    metrics = ScriptMetrics(
+            script=script_shortname or script,
+            script_hash=script_hash,
+            corpus_hash=corpus_hash,
+            target=target,
+            start_time=start_time,
+            duration=datetime.datetime.now() - start_time,
+            status=status,
+            flags_seen=len(seen_flags),
+            flags=','.join(f.decode('latin-1') for f in seen_flags),
+            host=platform.node(),
+            exit_code=code,
+    )
     METRICS_QUEUE.put(metrics)
 
     if logdir is not None:
@@ -655,7 +673,7 @@ def main() -> None:
         submission_thread.start()
         notification_thread.start()
 
-        mgr: Iterable[Tuple[str, Target]]
+        mgr: Iterable[Tuple[str, str, Target]]
         if args.corpus is not None:
             if args.script is not None:
                 sys.stderr.write("Error: only specify one of --corpus or --script\n")
@@ -663,7 +681,7 @@ def main() -> None:
                 sys.exit(1)
             mgr = CorpusManager(args.corpus, args.server, args.batch, target_mode, args.corpus_hints)
         elif args.script is not None:
-            mgr = ScriptManager(args.script, args.server, args.batch, target_mode, toplevel=True)
+            mgr = ScriptManager(args.script, args.server, args.batch, target_mode, args.script, toplevel=True)
         else:
             sys.stderr.write("Error: must specify one of --corpus or --script\n")
             sys.stderr.flush()
