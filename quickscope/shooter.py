@@ -19,6 +19,7 @@ import signal
 import platform
 
 import nclib
+from readerwriterlock import rwlock
 
 from .common import PORT, Target, Submission, Team, Service, setup_logging, ScriptResult, ScriptMetrics
 from .statuspage import statuspage, StatusServer, StatusHandler
@@ -49,6 +50,8 @@ parser.add_argument('--status-html', help='Dump status to file as html and exit'
 parser.add_argument('--status-server', help='Serve status on given addr:port forever')
 parser.add_argument('--corpus-hints', help='Use the name of the first directory level inside a corpus as a hint for the name of the service a script targets', action='store_true')
 parser.add_argument('--submit', help='Pipe stdin to the flag submission service', action='store_true')
+parser.add_argument('--sync-command', help='Command to run on an interval while no shots are running in order to perform maintenence')
+parser.add_argument('--sync-interval', help='Time in seconds between sync-command runs', type=int, default=60)
 
 class ShooterArgs(argparse.Namespace):
     corpus: Optional[str]
@@ -72,6 +75,8 @@ class ShooterArgs(argparse.Namespace):
     submit: bool
     service: Optional[str]
     team: Optional[str]
+    sync_command: Optional[str]
+    sync_interval: int
 
 class NotAnExploit(ValueError):
     pass
@@ -278,17 +283,22 @@ class Pool(Protocol):
         ...
 
 class SynchronousPool:
+    def __init__(self, lock: rwlock.Lockable):
+        self.lock = lock
+
     def apply(self, iterator: Iterable[Tuple[str, str, Target]], *args: Any, **kwargs: Any) -> None:
         for script, script_shortname, target in iterator:
             kwargss: Dict[str, Any] = kwargs | {'script_shortname': script_shortname}
-            shoot(script, target, *args, **kwargss)
+            with self.lock:
+                shoot(script, target, *args, **kwargss)
 
 class AsyncPool:
-    def __init__(self, procs: int):
+    def __init__(self, lock: rwlock.Lockable, procs: int):
         self.queue: "queue.Queue[Tuple[str, str, Target]]" = queue.Queue(maxsize=1)
         self.threads = [threading.Thread(target=self.worker, daemon=True) for _ in range(procs)]
         self.args: Tuple[Any, ...] = ()
         self.kwargs: Dict[str, Any] = {}
+        self.lock = lock
         for thread in self.threads:
             thread.start()
 
@@ -304,7 +314,8 @@ class AsyncPool:
             script, shortname, target = self.queue.get(block=True)
             try:
                 kwargs: Dict[str, Any] = self.kwargs | {'script_shortname': shortname}
-                shoot(script, target, *self.args, **kwargs)
+                with self.lock:
+                    shoot(script, target, *self.args, **kwargs)
             except:
                 logger.exception("Failed to shoot")
             finally:
@@ -313,7 +324,7 @@ class AsyncPool:
 class AdaptivePool:
     # warning: instances of this class will never be garbage collected
 
-    def __init__(self) -> None:
+    def __init__(self, lock: rwlock.Lockable) -> None:
         self.cpu_utilization: float = 0.0
         self.mem_utilization: float = 0.0
         self.watcher_thread: threading.Thread = threading.Thread(target=self.load_watcher, daemon=True)
@@ -323,6 +334,7 @@ class AdaptivePool:
         self.args: Tuple[Any, ...] = ()
         self.kwargs: Dict[str, Any] = {}
         self.queue: queue.Queue[Tuple[str, str, Target]] = queue.Queue(maxsize=1)
+        self.rlock = lock
         self.lock: threading.Lock = threading.Lock()
         self.live_tasks: int = 0
         self.target_threads: int = 1
@@ -365,7 +377,8 @@ class AdaptivePool:
                 self.live_tasks += 1
             try:
                 kwargs: Dict[str, Any] = self.kwargs | {'script_shortname': shortname}
-                shoot(script, target, *self.args, **kwargs)
+                with self.rlock:
+                    shoot(script, target, *self.args, **kwargs)
             except:
                 logger.exception("Failed to shoot")
             finally:
@@ -614,6 +627,13 @@ def submit_routine(server: str, target: Target, script: str) -> None:
         for flag in flag_regex.finditer(line):
             SUBMISSION_QUEUE.put(Submission(flag=flag.group(0), target=target, script=script))
 
+def sync_routine(command: str, interval: int, lock: rwlock.Lockable) -> None:
+    while not SUBMISSIONS_DONE:
+        with lock:
+            subprocess.run(command, shell=True, stdin=subprocess.DEVNULL)
+        time.sleep(interval)
+
+
 def main() -> None:
     global SUBMISSIONS_DONE
     setup_logging()
@@ -694,15 +714,21 @@ def main() -> None:
             sys.exit(1)
 
         pool: Pool
+        rlock = rwlock.RWLockWrite()
         if args.adaptive_procs:
-            pool = AdaptivePool()
+            pool = AdaptivePool(rlock.gen_rlock())
         elif args.procs:
-            pool = AsyncPool(args.procs)
+            pool = AsyncPool(rlock.gen_rlock(), args.procs)
         else:
-            pool = SynchronousPool()
+            pool = SynchronousPool(rlock.gen_rlock())
 
         metrics_thread = threading.Thread(target=metrics_routine, args=(args.server, debounce))
         metrics_thread.start()
+
+        sync_thread = None
+        if args.sync_command is not None:
+            sync_thread = threading.Thread(target=sync_routine, args=(args.sync_command, args.sync_interval, rlock.gen_wlock()))
+            sync_thread.start()
 
         pool.apply(
             mgr,
@@ -715,6 +741,8 @@ def main() -> None:
 
         SUBMISSIONS_DONE = True
         metrics_thread.join()
+        if sync_thread is not None:
+            sync_thread.join()
 
     submission_thread.join()
     notification_thread.join()
