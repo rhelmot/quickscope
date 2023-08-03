@@ -521,7 +521,7 @@ def shoot(
     METRICS_QUEUE.put(metrics)
 
     if logdir is not None:
-        log_filename = os.path.join(logdir, script, start_time.isoformat() + '.log')
+        log_filename = os.path.join(logdir, script, start_time.isoformat() + '-' + target.team.name + '.log')
         pathlib.Path(log_filename).parent.mkdir(parents=True, exist_ok=True)
         with open(log_filename, 'wb') as fp2:
             fp2.write(metrics.to_json().encode() + b'\n')
@@ -631,6 +631,11 @@ def main() -> None:
             SUBMISSIONS_DONE = True
             sys.exit()
 
+    def on_shutdown(*args: Any) -> None:
+        global SUBMISSIONS_DONE
+        SUBMISSIONS_DONE = True
+        sys.exit()
+
     args = parser.parse_args(sys.argv[1:], namespace=ShooterArgs())
     if args.status_html:
         with open(args.status_html, 'w', encoding='utf-8') as fp:
@@ -645,6 +650,7 @@ def main() -> None:
         return
 
     signal.signal(signal.SIGINT, force_exit)
+    signal.signal(signal.SIGTERM, on_shutdown)
 
     target_mode = parse_target_mode(args)
     debounce = 5 if isinstance(target_mode, Forever) or args.submit else 1

@@ -11,6 +11,8 @@ import os
 import argparse
 import logging
 import queue
+import sys
+import signal
 import IPython
 
 from .common import *
@@ -117,6 +119,11 @@ class Tracker:
         self.submit_thread.start()
         self.metrics_thread.start()
         self.scraper_thread.start()
+
+        def bye(*args: Any) -> None:
+            sys.exit()
+
+        signal.signal(signal.SIGTERM, bye)
 
     def __getstate__(self) -> Dict[str, Any]:
         return {
