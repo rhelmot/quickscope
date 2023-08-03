@@ -521,7 +521,7 @@ def shoot(
     METRICS_QUEUE.put(metrics)
 
     if logdir is not None:
-        log_filename = os.path.join(logdir, script, start_time.isoformat() + '-' + target.team.name + '.log')
+        log_filename = os.path.join(logdir, script_shortname or os.path.basename(script), start_time.isoformat() + '-' + target.team.name + '.log')
         pathlib.Path(log_filename).parent.mkdir(parents=True, exist_ok=True)
         with open(log_filename, 'wb') as fp2:
             fp2.write(metrics.to_json().encode() + b'\n')
