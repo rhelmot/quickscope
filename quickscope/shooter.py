@@ -290,17 +290,17 @@ class Pool(Protocol):
         ...
 
 class SynchronousPool:
-    def __init__(self, lock: rwlock.Lockable):
+    def __init__(self, lock: rwlock.RWLockWrite):
         self.lock = lock
 
     def apply(self, iterator: Iterable[Tuple[str, str, Target]], *args: Any, **kwargs: Any) -> None:
         for script, script_shortname, target in iterator:
             kwargss: Dict[str, Any] = kwargs | {'script_shortname': script_shortname}
-            with self.lock:
+            with self.lock.gen_rlock():
                 shoot(script, target, *args, **kwargss)
 
 class AsyncPool:
-    def __init__(self, lock: rwlock.Lockable, procs: int):
+    def __init__(self, lock: rwlock.RWLockWrite, procs: int):
         self.queue: "queue.Queue[Tuple[str, str, Target]]" = queue.Queue(maxsize=1)
         self.threads = [threading.Thread(target=self.worker, daemon=True) for _ in range(procs)]
         self.args: Tuple[Any, ...] = ()
@@ -321,7 +321,7 @@ class AsyncPool:
             script, shortname, target = self.queue.get(block=True)
             try:
                 kwargs: Dict[str, Any] = self.kwargs | {'script_shortname': shortname}
-                with self.lock:
+                with self.lock.gen_rlock():
                     shoot(script, target, *self.args, **kwargs)
             except:
                 logger.exception("Failed to shoot")
@@ -331,7 +331,7 @@ class AsyncPool:
 class AdaptivePool:
     # warning: instances of this class will never be garbage collected
 
-    def __init__(self, lock: rwlock.Lockable) -> None:
+    def __init__(self, lock: rwlock.RWLockWrite) -> None:
         self.cpu_utilization: float = 0.0
         self.mem_utilization: float = 0.0
         self.watcher_thread: threading.Thread = threading.Thread(target=self.load_watcher, daemon=True)
@@ -384,7 +384,7 @@ class AdaptivePool:
                 self.live_tasks += 1
             try:
                 kwargs: Dict[str, Any] = self.kwargs | {'script_shortname': shortname}
-                with self.rlock:
+                with self.rlock.gen_rlock():
                     shoot(script, target, *self.args, **kwargs)
             except:
                 logger.exception("Failed to shoot")
@@ -723,11 +723,11 @@ def main() -> None:
         pool: Pool
         rlock = rwlock.RWLockWrite()
         if args.adaptive_procs:
-            pool = AdaptivePool(rlock.gen_rlock())
+            pool = AdaptivePool(rlock)
         elif args.procs:
-            pool = AsyncPool(rlock.gen_rlock(), args.procs)
+            pool = AsyncPool(rlock, args.procs)
         else:
-            pool = SynchronousPool(rlock.gen_rlock())
+            pool = SynchronousPool(rlock)
 
         metrics_thread = threading.Thread(target=metrics_routine, args=(args.server, debounce))
         metrics_thread.start()
