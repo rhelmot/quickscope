@@ -118,7 +118,14 @@ def parse_target_mode(args: ShooterArgs) -> TargetMode:
     return results[0]
 
 def get_flag_regex(server: str) -> re.Pattern[bytes]:
-    sock = nclib.Netcat(server)
+    while True:
+        try:
+            sock = nclib.Netcat(server)
+        except nclib.NetcatError:
+            time.sleep(3)
+            continue
+        else:
+            break
     sock.sendln(b'getregex')
     return re.compile(sock.readln().strip())
 
