@@ -534,7 +534,7 @@ def shoot(
             duration=datetime.datetime.now() - start_time,
             status=status,
             flags_seen=len(seen_flags),
-            flags=','.join(f.decode('latin-1') for f in seen_flags),
+            flags= [f.decode('latin-1') for f in seen_flags],
             host=platform.node(),
             exit_code=code,
     )

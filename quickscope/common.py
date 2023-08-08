@@ -54,7 +54,7 @@ class ScriptMetrics(DataClassJsonMixin):
     status: ScriptResult
     exit_code: int
     flags_seen: int
-    flags: str
+    flags: List[str]
 
 @dataclass(frozen=True)
 class Submission(DataClassJsonMixin):
