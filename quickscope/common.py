@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import enum
 from dataclasses import dataclass, field
 from dataclasses_json import config, DataClassJsonMixin
@@ -54,7 +54,7 @@ class ScriptMetrics(DataClassJsonMixin):
     status: ScriptResult
     exit_code: int
     flags_seen: int
-    flags: List[str]
+    flags: Tuple[str, ...]
 
 @dataclass(frozen=True)
 class Submission(DataClassJsonMixin):
